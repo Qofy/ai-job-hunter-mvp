@@ -8,6 +8,7 @@ export function generateStaticParams() {
     "applications",
     "analytics",
     "profile",
+    "cv",
     "settings",
   ].map((section) => ({ section }));
 }
@@ -25,6 +26,7 @@ export default async function Page({
       "applications",
       "analytics",
       "profile",
+      "cv",
       "settings",
     ].includes(section)
   )

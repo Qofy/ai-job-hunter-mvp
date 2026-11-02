@@ -62,9 +62,10 @@ export const countries = [
   "Slovenia",
   "Spain",
   "Sweden",
+  "Ghana",
 ];
 export function cvText(p: Profile) {
-  return `${p.name}\n${p.headline} · ${p.location}\n\n${p.experience_summary}\n\nSKILLS\n${p.skills.filter((s) => !s.toLowerCase().includes("vue")).join(" · ")}\n\nEXPERIENCE\n${p.experience.map((e) => `${e.title} · ${e.company}\n${e.dates}`).join("\n\n")}\n\nPROJECTS\n${p.projects.join(" · ")}\n\nEDUCATION\n${p.education}`;
+  return `${p.name}\n${p.headline} · ${p.location}\n\n${p.experience_summary}\n\nSKILLS\n${p.skills.join(" · ")}\n\nEXPERIENCE\n${p.experience.map((e) => `${e.title} · ${e.company}\n${e.dates}`).join("\n\n")}\n\nPROJECTS\n${p.projects.join(" · ")}\n\nEDUCATION\n${p.education}`;
 }
 export function snapshot(d: Draft) {
   return JSON.stringify({

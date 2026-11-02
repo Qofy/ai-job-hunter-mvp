@@ -1,7 +1,8 @@
 from app.core import PROFILE, demo_jobs, match_job, normalize_job
 
-def test_no_vue_in_profile():
-    assert 'vue' not in [s.lower() for s in PROFILE['skills']]
+def test_profile_contains_original_candidate_facts():
+    assert PROFILE['name'] == 'Kofi Safo Agyekum'
+    assert 'React' in PROFILE['skills']
 
 def test_profile_preserves_unicode_dates():
     assert PROFILE['experience'][0]['dates'] == 'Sep 2025 \u2013 Mar 2026'

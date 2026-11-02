@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
+  // Use a separate directory for parallel preview processes to keep builds isolated.
   distDir: process.env.JOBPILOT_DIST_DIR || ".next",
   async rewrites() {
     const backend = (

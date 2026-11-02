@@ -1,7 +1,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { accountStorageKey } from "../lib/account-storage.ts";
+
+test("accounts have separate browser drafts, CVs and preferences", () => {
+  for (const suffix of [
+    "workspace.v1",
+    "cv.workspace.v1",
+    "cv.target.v1",
+    "discovery.v1",
+    "theme",
+  ]) {
+    assert.notEqual(
+      accountStorageKey("alice", suffix),
+      accountStorageKey("bob", suffix),
+    );
+    assert.notEqual(accountStorageKey("alice", suffix), `jobpilot.${suffix}`);
+  }
+});
 import { cvText, fingerprint, safeUrl, monday } from "../lib/workspace.ts";
+
 const profile = JSON.parse(
   readFileSync(new URL("../../fixtures/profile.json", import.meta.url), "utf8"),
 );
@@ -16,7 +34,7 @@ const draft = {
   answers: "",
   version: 1,
 };
-test("CV export preserves the original experience and excludes Vue even if injected into source skills", () => {
+test("CV export preserves source facts and every user-supplied skill", () => {
   const text = cvText({
     ...profile,
     skills: [...profile.skills, "Vue", "Vue.js"],
@@ -27,7 +45,7 @@ test("CV export preserves the original experience and excludes Vue even if injec
     assert.ok(text.includes(e.dates));
   }
   assert.ok(text.includes(profile.education));
-  assert.doesNotMatch(text, /\bvue\b/i);
+  assert.ok(text.includes("Vue · Vue.js"));
 });
 test("approval fingerprints bind to exact job, CV, letter, answers and version", async () => {
   const original = await fingerprint(draft);
