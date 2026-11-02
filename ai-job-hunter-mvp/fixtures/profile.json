@@ -1,0 +1,14 @@
+{
+  "name":"Kofi Safo Agyekum",
+  "headline":"Frontend Engineer",
+  "location":"Uetersen, Germany",
+  "experience_summary":"CV states 2 years of industry experience",
+  "skills":["TypeScript","JavaScript","React","Next.js","HTML5","CSS3","Tailwind CSS","SCSS","Redux Toolkit","TanStack Query","Axios","REST API","Jest","Cypress","Git","Docker"],
+  "experience":[{"company":"Intuivo OU","title":"Software Engineer","dates":"Sep 2025 – Mar 2026"},{"company":"theSOFTtribe Ltd.","title":"Software Developer","dates":"Mar 2022 – Jul 2023"}],
+  "projects":["LegalTracker","NutriScan"],
+  "education":"B.Sc. Software Engineering, University of Europe for Applied Sciences (CV: Sep 2023 – Aug 2026)",
+  "targets":{"titles":["Frontend Engineer","React Developer","Software Engineer","Junior Developer"],"region":"European Union, Germany prioritized","arrangements":["Remote","Hybrid","On-site"],"weekly_approved_target":"10–15"},
+  "unknowns":["professional languages","work authorization by country","salary expectations","relocation preferences"],
+  "excluded_cv_skills":["Vue"],
+  "source":"Kofi_Agyekum_Frontend_Engineer_No_Vue.pdf"
+}

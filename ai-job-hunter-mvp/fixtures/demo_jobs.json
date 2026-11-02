@@ -1,0 +1,5 @@
+[
+ {"id":"example-1","company":"DEMO COMPANY (fictional)","title":"Junior React Developer","location":"Berlin, Germany","url":"https://example.com/demo/1","description":"React, TypeScript, JavaScript, REST API, Git, Jest"},
+ {"id":"example-2","company":"DEMO COMPANY (fictional)","title":"Frontend Engineer","location":"Amsterdam, Netherlands","url":"https://example.com/demo/2","description":"React, Next.js, TypeScript, Tailwind CSS, Cypress"},
+ {"id":"example-3","company":"DEMO COMPANY (fictional)","title":"Senior Software Engineer","location":"Paris, France","url":"https://example.com/demo/3","description":"JavaScript, React, Vue and 8+ years experience"}
+]
