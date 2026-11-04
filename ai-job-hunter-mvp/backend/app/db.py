@@ -1,5 +1,8 @@
 """SQLite files live in application data, never in the source checkout."""
 import os
+import sqlite3
+from datetime import datetime,timezone
+from uuid import uuid4
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -18,8 +21,8 @@ def data_directory() -> Path:
     path = Path(os.getenv('JOBPILOT_DATA_DIR', str(default))).expanduser().resolve()
     if path.is_relative_to(REPOSITORY):
         raise RuntimeError('JOBPILOT_DATA_DIR must be outside the source repository.')
-    path.mkdir(parents=True, exist_ok=True)
-    (path / 'files').mkdir(exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True,mode=0o700)
+    (path / 'files').mkdir(exist_ok=True,mode=0o700)
     return path
 
 
@@ -54,12 +57,24 @@ def initialize():
     with _lock:
         key = str(engine.url)
         if key not in _migrated:
+            database=Path(engine.url.database)
+            if database.exists() and database.stat().st_size:
+                with sqlite3.connect(database) as source:
+                    try: version=source.execute('SELECT version_num FROM alembic_version').fetchone()
+                    except sqlite3.OperationalError: version=None
+                    if not version or version[0]!='0003_queue_integrity':
+                        backups=data_directory()/'backups';backups.mkdir(exist_ok=True,mode=0o700)
+                        filename=f"before-upgrade-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}.sqlite3"
+                        target=backups/filename
+                        with sqlite3.connect(target) as destination: source.backup(destination)
+                        os.chmod(target,0o600)
             config = Config(str(BACKEND / 'alembic.ini'))
             config.set_main_option('script_location', str(BACKEND / 'migrations'))
             with engine.begin() as connection:
                 config.attributes['connection'] = connection
                 command.upgrade(config, 'head')
             _migrated.add(key)
+            if database.exists(): os.chmod(database,0o600)
     return engine
 
 

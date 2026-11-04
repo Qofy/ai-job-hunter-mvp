@@ -37,6 +37,7 @@ def extract_cv(filename: str, data: bytes) -> dict:
         raise ValueError('CV files must be 5 MB or smaller.')
     suffix = Path(filename).suffix.lower()
     pages = None
+    layout_warnings = []
     if suffix in {'.txt', '.md'}:
         try:
             text = data.decode('utf-8-sig')
@@ -53,6 +54,7 @@ def extract_cv(filename: str, data: bytes) -> dict:
             if pages > 10:
                 raise ValueError('Please upload a CV with 10 pages or fewer.')
             text = '\n\n'.join(page.extract_text() or '' for page in reader.pages)
+            layout_warnings.append('PDF text was extracted, but columns, reading order and visual layout were not reliably assessed. Review the extracted text and use a simple export template.')
         except ValueError:
             raise
         except Exception as exc:
@@ -69,6 +71,14 @@ def extract_cv(filename: str, data: bytes) -> dict:
                 root = ElementTree.fromstring(archive.read(info))
                 ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
                 text = '\n'.join(''.join(p.itertext()) for p in root.findall('.//w:p', ns))
+                if root.findall('.//w:tbl',ns):
+                    layout_warnings.append('Word tables detected. Some parsers may read their contents out of order; the generated template uses a single text column.')
+                if root.findall('.//w:drawing',ns) or root.findall('.//w:pict',ns):
+                    layout_warnings.append('Images or drawing objects detected. Important qualifications should also appear as selectable text.')
+                if any(int(column.get('{'+ns['w']+'}num','1'))>1 for column in root.findall('.//w:cols',ns)):
+                    layout_warnings.append('Multiple Word columns detected. Confirm the reading order; generated exports use one column.')
+                if any(re.match(r'word/(header|footer)\d+\.xml$',entry.filename) for entry in infos):
+                    layout_warnings.append('Word headers or footers detected. Their text is not part of this extraction; check contact details manually.')
         except DefusedXmlException as exc:
             raise ValueError('The DOCX could not be read safely. Export a new Word .docx or paste its text.') from exc
         except ValueError:
@@ -82,7 +92,7 @@ def extract_cv(filename: str, data: bytes) -> dict:
         raise ValueError('The extracted CV exceeds 60,000 characters. Please upload a shorter document.')
     if len(text) < 30:
         raise ValueError('Not enough selectable text was found. For a scanned CV, run OCR first or paste its text.')
-    warnings = ['Extraction preserves text, not the original page layout. Review reading order, dates and contact details.']
+    warnings = ['Extraction preserves text, not the original page layout. Review reading order, dates and contact details.',*layout_warnings]
     return {'filename': Path(filename.replace('\\', '/')).name[:180], 'text': text,
             'characters': len(text), 'pages': pages, 'warnings': warnings}
 

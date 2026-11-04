@@ -50,12 +50,12 @@ def test_migration_foreign_keys_indexes_and_restart():
     engine = initialize()
     assert initialize() is engine
     tables = inspect(engine).get_table_names()
-    assert len(tables) == 16  # 15 domain tables plus Alembic's version table.
+    assert len(tables) == 17  # 16 domain tables plus Alembic's version table.
     assert inspect(engine).get_indexes('sessions')
     with engine.connect() as connection:
         assert connection.exec_driver_sql('PRAGMA foreign_keys').scalar() == 1
         assert connection.exec_driver_sql('PRAGMA journal_mode').scalar() == 'wal'
-        assert connection.execute(text('select version_num from alembic_version')).scalar() == '0001_local'
+        assert connection.execute(text('select version_num from alembic_version')).scalar() == '0003_queue_integrity'
     assert not data_directory().is_relative_to(REPOSITORY)
     assert (data_directory() / 'files').is_dir()
 

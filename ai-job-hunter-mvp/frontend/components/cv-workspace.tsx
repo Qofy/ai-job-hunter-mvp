@@ -24,6 +24,7 @@ import {
 } from "../lib/api";
 import { cvText, download } from "../lib/workspace";
 import { useStorageKey } from "./local-account";
+import DocumentStudio from "./document-studio";
 
 const maxCharacters = 60_000;
 function SkillList({
@@ -74,6 +75,18 @@ export default function CVWorkspace({
     [reviewed, setReviewed] = useState(false),
     [originalOpen, setOriginalOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    void api
+      .candidate()
+      .then((value) => {
+        if (value.master_cv && value.verified) {
+          setSource((current) => current || value.master_cv);
+          setOriginal((current) => current || value.master_cv);
+          setFilename((current) => current || "Verified master CV");
+        }
+      })
+      .catch(() => {});
+  }, [storageKey]);
   useEffect(() => {
     try {
       const saved = localStorage.getItem(key);
@@ -219,8 +232,9 @@ export default function CVWorkspace({
           <p>
             Upload → review extracted text → compare with a role → edit and
             review a separate tailored draft. Files are processed by your
-            backend, never sent to an external AI provider. Save explicitly to
-            keep text in this browser.
+            backend. Rules-based tools stay local; the optional Claude API
+            workflow below requires your consent before sending text. Save
+            explicitly to keep text in this browser.
           </p>
         </div>
         <span className="badge blue">Rules-based tailoring</span>
@@ -559,6 +573,7 @@ export default function CVWorkspace({
           </div>
         </section>
       )}
+      <DocumentStudio source={source} jd={jd} seed={tailored} target={target} />
       <div className="cv-save-bar">
         <span>
           <Save size={16} />

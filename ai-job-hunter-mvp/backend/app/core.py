@@ -29,7 +29,7 @@ def match_job(job: dict, profile: dict = PROFILE) -> dict:
     # Heuristic relevance only; not an ATS prediction or hiring probability.
     score = min(100, (40 if role_fit else 0) + min(40, len(hits)*8) + (10 if 'junior' in title else 0))
     blockers = []
-    if 'senior' in title or 'staff' in title or 'principal' in title: blockers.append('Review this role\'s seniority requirements against your CV')
+    if re.search(r'\b(senior|staff|principal|lead|head|director)\b',title): blockers.append('Review this role\'s seniority requirements against your CV')
     if not skills: blockers.append('No profile skills saved yet; this relevance score uses the role title only')
     return {'score':score,'matched_skills':hits,'flags':blockers,'explanation':'Heuristic score from title and verified CV skill mentions; eligibility, language, and salary need manual review.'}
 

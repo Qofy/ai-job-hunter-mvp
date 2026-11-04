@@ -194,3 +194,21 @@ class Credential(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
     provider: Mapped[str] = mapped_column(String)
     encrypted_value: Mapped[str] = mapped_column(Text)
+
+
+class AgentTask(Base):
+    __tablename__ = 'agent_tasks'
+    __table_args__ = (UniqueConstraint('application_id','document_id'),
+        ForeignKeyConstraint(['application_id','user_id'],['application_drafts.id','application_drafts.user_id']),
+        ForeignKeyConstraint(['document_id','user_id'],['document_versions.id','document_versions.user_id']))
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'),index=True)
+    application_id: Mapped[str] = mapped_column(String(36),index=True)
+    document_id: Mapped[str] = mapped_column(String(36))
+    document_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(30),default='queued',index=True)
+    automatic: Mapped[bool] = mapped_column(Boolean,default=False)
+    attempt_id: Mapped[str | None] = mapped_column(ForeignKey('submission_attempts.id'))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String,default=now)
+    updated_at: Mapped[str] = mapped_column(String,default=now)

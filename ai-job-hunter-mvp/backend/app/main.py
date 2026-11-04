@@ -1,23 +1,55 @@
 import os
+import hashlib
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import select, or_
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.orm import Session
 from .core import demo_jobs, greenhouse_jobs, match_job
-from .db import initialize, get_session
+from .db import initialize, get_session, data_directory
 from .auth import router as auth_router, signed_in
 from .local_routes import router as local_router, canonical_url
 from .cv_routes import router as cv_router
 from .models import User, CandidateProfile, Job, now
 from .live_jobs import router as live_jobs_router
+from .document_studio import router as document_router
+from .workflow import router as workflow_router
+from .gmail import router as gmail_router
+from .agent import router as agent_router, worker
+from .production import router as production_router
+from .ai_connection import router as ai_connection_router
 
-app = FastAPI(title='JobPilot AI — Local', version='0.2.0')
+@asynccontextmanager
+async def lifespan(app):
+    initialize()
+    task=asyncio.create_task(worker()) if os.getenv('JOBPILOT_AGENT_ENABLED','1')!='0' else None
+    yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError): await task
+
+
+app = FastAPI(title='JobPilot AI — Local', version='0.3.0',lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(local_router)
 app.include_router(cv_router)
 app.include_router(live_jobs_router)
+app.include_router(document_router)
+app.include_router(workflow_router)
+app.include_router(gmail_router)
+app.include_router(agent_router)
+app.include_router(production_router)
+app.include_router(ai_connection_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request,exc):
+    return JSONResponse(status_code=422,content={'detail':[
+        {key:item[key] for key in ['loc','msg','type'] if key in item} for item in exc.errors()]})
 origins = {os.getenv('FRONTEND_ORIGIN','http://localhost:3000'), 'http://localhost:3000',
            'http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001'}
 app.add_middleware(CORSMiddleware, allow_origins=sorted(origins), allow_credentials=True,
@@ -42,7 +74,8 @@ async def local_request_policy(request: Request, call_next):
 @app.get('/health')
 def health():
     initialize()
-    return {'ok':True,'database_configured':True,'database':'sqlite','schema_version':'0001_local'}
+    return {'ok':True,'database_configured':True,'database':'sqlite','schema_version':'0003_queue_integrity',
+            'instance_id':hashlib.sha256(str(data_directory()).casefold().encode()).hexdigest()[:16]}
 
 
 def discovered(rows, user, db):
@@ -65,6 +98,8 @@ def discovered(rows, user, db):
 
 @app.get('/jobs/demo')
 def demo(user: User = Depends(signed_in), db: Session = Depends(get_session)):
+    if os.getenv('JOBPILOT_ENABLE_DEMO','0')!='1':
+        raise HTTPException(403,'Demo fixtures are disabled in the real workspace.')
     return discovered(demo_jobs(), user, db)
 
 

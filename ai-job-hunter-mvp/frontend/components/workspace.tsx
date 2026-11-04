@@ -39,6 +39,15 @@ import {
 import { Button } from "./ui/button";
 import CVWorkspace from "./cv-workspace";
 import SourceDirectory from "./source-directory";
+import AutomationSettings from "./automation-settings";
+import SavedApplications from "./saved-applications";
+import {
+  ProductionDashboard,
+  ProductionAnalytics,
+  ProductionApplications,
+} from "./production-workspace";
+import ProductionSettings from "./production-settings";
+import CandidateEditor from "./candidate-editor";
 import { useStorageKey } from "./local-account";
 import { api, type Job, type Profile, type LiveJobSearch } from "../lib/api";
 import {
@@ -53,6 +62,9 @@ import {
   type DraftStatus,
   type Preferences,
 } from "../lib/workspace";
+
+const legacyWorkspace = process.env.NEXT_PUBLIC_LEGACY_WORKSPACE === "true";
+const allowDemo = process.env.NEXT_PUBLIC_ENABLE_DEMO === "true";
 
 const navigation = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
@@ -201,7 +213,11 @@ function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
               target="_blank"
               rel="noreferrer"
             >
-              {job.source === "germantechjobs" ? "GermanTechJobs" : job.source === "arbeitnow" ? "Arbeitnow" : "Greenhouse"}
+              {job.source === "germantechjobs"
+                ? "GermanTechJobs"
+                : job.source === "arbeitnow"
+                  ? "Arbeitnow"
+                  : "Greenhouse"}
             </a>
           )}{" "}
           <span className="muted">· Heuristic relevance</span>
@@ -219,7 +235,9 @@ export default function Workspace({ section }: { section: string }) {
   const initialLiveSearch = useRef(false);
   const [roleQuery, setRoleQuery] = useState(defaults.roles.join(", "));
   const [discovering, setDiscovering] = useState(false);
-  const [liveSource, setLiveSource] = useState<"arbeitnow" | "germantechjobs">("arbeitnow");
+  const [liveSource, setLiveSource] = useState<"arbeitnow" | "germantechjobs">(
+    "arbeitnow",
+  );
   const [sourceInfo, setSourceInfo] = useState<LiveJobSearch["source"] | null>(
     null,
   );
@@ -295,7 +313,21 @@ export default function Workspace({ section }: { section: string }) {
         "Saved workspace could not be restored. New changes remain available in this session.",
       );
     }
-    setReady(true);
+    void api
+      .candidate()
+      .then((data) => {
+        const saved = data.preferences;
+        setPrefs((previous) => ({
+          ...previous,
+          roles: saved.roles || previous.roles,
+          countries: saved.countries || previous.countries,
+          arrangements: saved.arrangements || previous.arrangements,
+          target: saved.target || previous.target,
+        }));
+        if (saved.roles?.length) setRoleQuery(saved.roles.join(", "));
+      })
+      .catch(() => {})
+      .finally(() => setReady(true));
     void connect();
     if (section !== "jobs")
       void api
@@ -428,53 +460,27 @@ export default function Workspace({ section }: { section: string }) {
       setDiscovering(false);
     }
   }
-  function prepare(job: Job, tailoredCV?: string) {
-    if (tailoredCV && tailoredCV.trim().length < 30) {
-      setNotice("Review the CV facts before preparing a draft.");
-      return;
-    }
-    if (!profile && !tailoredCV) {
-      setNotice(
-        "Connect to the backend to load the verified candidate profile first.",
-      );
-      return;
-    }
-    const existing = drafts.find(
-      (d) => d.job.id === job.id || (!job.is_demo && d.job.url === job.url),
-    );
-    if (existing) {
-      setActive(existing.id);
-      setNotice(
-        "This role already has a local application. Open Approval center to review it.",
-      );
+  async function prepare(job: Job, tailoredCV?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await api.prepareDiscovered({
+        job_id: job.id,
+        job_url: job.url,
+        cv_text: tailoredCV || undefined,
+        facts_confirmed: !!tailoredCV,
+      });
       setSelected(null);
-      return;
+      setNotice(
+        "Application saved to your local account. Open Approval center to review the exact CV, cover letter and job. Nothing was submitted.",
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Could not prepare the application.",
+      );
+    } finally {
+      setBusy(false);
     }
-    const at = new Date().toISOString();
-    const draft: Draft = {
-      id: crypto.randomUUID(),
-      job,
-      cv: tailoredCV || (profile ? cvText(profile) : ""),
-      letter: "",
-      answers: "",
-      version: 1,
-      status: "pending_approval",
-      createdAt: at,
-      events: [
-        {
-          at,
-          label: tailoredCV
-            ? "Local draft prepared from a user-reviewed tailored CV"
-            : "Local draft prepared from verified CV facts",
-        },
-      ],
-    };
-    setDrafts((prev) => [draft, ...prev]);
-    setActive(draft.id);
-    setSelected(null);
-    setNotice(
-      `${job.is_demo ? "DEMO draft" : "Local draft"} prepared. Review documents in Approval center. No server application was created.`,
-    );
   }
   function edit(field: "cv" | "letter" | "answers", value: string) {
     if (!current) return;
@@ -604,9 +610,9 @@ export default function Workspace({ section }: { section: string }) {
             <ShieldCheck size={15} />
           </div>
           <p>
-            Every application needs
+            Your documents. Your rules.
             <br />
-            your explicit approval.
+            You stay in control.
           </p>
           <Link href="/profile" className="user-block">
             <span className="avatar">
@@ -703,7 +709,8 @@ export default function Workspace({ section }: { section: string }) {
               </div>
               {section === "dashboard" && (
                 <p className="greeting">
-                  Welcome back{profile ? `, ${profile.name.split(" ")[0]}` : ""}{" "}
+                  Welcome back
+                  {profile?.name ? `, ${profile.name.split(" ")[0]}` : ""}{" "}
                   <span className="wave">✦</span>
                 </p>
               )}
@@ -721,7 +728,7 @@ export default function Workspace({ section }: { section: string }) {
                 </Button>
               ) : (
                 <Badge tone="blue">
-                  <ShieldCheck size={13} /> Supervised mode
+                  <ShieldCheck size={13} /> Local workspace
                 </Badge>
               )}
             </div>
@@ -756,11 +763,11 @@ export default function Workspace({ section }: { section: string }) {
           )}
           <div className="scope-bar">
             <span>
-              <span className="status-dot" /> Browser-local workspace
+              <span className="status-dot" /> Local-first workspace
             </span>
             <span>
-              Drafts & decisions stay on this device. Server applications are
-              not loaded.
+              Real job feeds | Versioned applications | Your local account
+              database.
             </span>
           </div>
           {loading && (
@@ -774,7 +781,21 @@ export default function Workspace({ section }: { section: string }) {
               Searching job sources…
             </div>
           )}
-          {section === "dashboard" && (
+          {!legacyWorkspace && section === "dashboard" && (
+            <ProductionDashboard />
+          )}
+          {!legacyWorkspace && section === "approvals" && (
+            <ProductionApplications reviewOnly />
+          )}
+          {!legacyWorkspace && section === "applications" && (
+            <ProductionApplications />
+          )}
+          {!legacyWorkspace && section === "analytics" && (
+            <ProductionAnalytics />
+          )}
+          {!legacyWorkspace && section === "profile" && <CandidateEditor />}
+          {!legacyWorkspace && section === "settings" && <ProductionSettings />}
+          {legacyWorkspace && section === "dashboard" && (
             <>
               <div className="stats-grid">
                 {[
@@ -984,12 +1005,16 @@ export default function Workspace({ section }: { section: string }) {
           )}
           {section === "jobs" && (
             <>
-              <SourceDirectory role={roleQuery.split(",")[0].trim()} country={country || prefs.countries[0] || "Germany"} />
+              <SourceDirectory
+                role={roleQuery.split(",")[0].trim()}
+                country={country || prefs.countries[0] || "Germany"}
+              />
               <div className="discovery-bar">
                 <div>
                   <h2>Search real vacancies</h2>
                   <p>
-                    Choose a public feed below, or explore the additional job boards. Live feeds need no API key.
+                    Choose a public feed below, or explore the additional job
+                    boards. Live feeds need no API key.
                   </p>
                 </div>
                 <form
@@ -1001,7 +1026,14 @@ export default function Workspace({ section }: { section: string }) {
                 >
                   <label className="field-label" htmlFor="live-source">
                     Live feed
-                    <select id="live-source" value={liveSource} disabled={discovering} onChange={(event) => setLiveSource(event.target.value as typeof liveSource)}>
+                    <select
+                      id="live-source"
+                      value={liveSource}
+                      disabled={discovering}
+                      onChange={(event) =>
+                        setLiveSource(event.target.value as typeof liveSource)
+                      }
+                    >
                       <option value="arbeitnow">Arbeitnow</option>
                       <option value="germantechjobs">GermanTechJobs</option>
                     </select>
@@ -1072,7 +1104,7 @@ export default function Workspace({ section }: { section: string }) {
                 )}
                 <details className="advanced-discovery">
                   <summary>
-                    Advanced: company board search and demo tools
+                    Advanced: search a company�s Greenhouse board
                   </summary>
                   <form
                     className="row wrap"
@@ -1094,18 +1126,20 @@ export default function Workspace({ section }: { section: string }) {
                       <Search size={15} />
                       Search live board
                     </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={loading || discovering}
-                      onClick={() => void discover(true)}
-                    >
-                      Load DEMO
-                    </Button>
+                    {allowDemo && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={loading || discovering}
+                        onClick={() => void discover(true)}
+                      >
+                        Load DEMO
+                      </Button>
+                    )}
                   </form>
                   <p className="live-search-note">
-                    Greenhouse searches a single public company board. DEMO jobs
-                    are fictional and never loaded automatically.
+                    Greenhouse searches a single public company board. Public
+                    feed searches above work across companies.
                   </p>
                 </details>
               </div>
@@ -1241,7 +1275,7 @@ export default function Workspace({ section }: { section: string }) {
               </div>
             </>
           )}
-          {section === "approvals" && (
+          {legacyWorkspace && section === "approvals" && (
             <>
               <div className="review-intro">
                 <ShieldCheck size={20} />
@@ -1536,8 +1570,9 @@ export default function Workspace({ section }: { section: string }) {
               )}
             </>
           )}
-          {section === "applications" && (
+          {legacyWorkspace && section === "applications" && (
             <>
+              <SavedApplications />
               <div className="section-toolbar">
                 <div>
                   <h2>
@@ -1668,13 +1703,13 @@ export default function Workspace({ section }: { section: string }) {
               )}
               <div className="info-strip">
                 <CircleAlert size={17} />
-                Server application history and confirmation links require an
-                authenticated application-list API. Local approvals are not
-                submissions.
+                Saved records and reported progress appear above. Browser drafts
+                below are separate. Approval alone is not submission; recruiter
+                outcomes require evidence.
               </div>
             </>
           )}
-          {section === "analytics" && (
+          {legacyWorkspace && section === "analytics" && (
             <>
               <div className="stats-grid">
                 {[
@@ -1811,7 +1846,7 @@ export default function Workspace({ section }: { section: string }) {
               </div>
             </>
           )}
-          {section === "profile" && (
+          {legacyWorkspace && section === "profile" && (
             <>
               <div className="cv-profile-cta">
                 <div>
@@ -1998,7 +2033,7 @@ export default function Workspace({ section }: { section: string }) {
               )}
             </>
           )}
-          {section === "settings" && (
+          {legacyWorkspace && section === "settings" && (
             <div className="settings-grid">
               <div>
                 <Panel
@@ -2134,7 +2169,8 @@ export default function Workspace({ section }: { section: string }) {
                     Check connection
                   </Button>
                 </Panel>
-                <Panel title="Agent controls" className="mt">
+                <AutomationSettings />
+                <Panel title="Browser planning controls" className="mt">
                   <p className="muted">
                     No scheduler or background agent exists yet. This is a local
                     planning preference.
@@ -2159,8 +2195,9 @@ export default function Workspace({ section }: { section: string }) {
                   </Button>
                   <div className="info-strip">
                     <ShieldCheck size={18} />
-                    Per-application approval is always required. Submission
-                    executor is not implemented.
+                    Choose your server-saved application mode above. These
+                    browser planning controls do not start a submission
+                    executor.
                   </div>
                 </Panel>
                 <Panel title="Workspace backup" className="mt">
@@ -2298,15 +2335,15 @@ export default function Workspace({ section }: { section: string }) {
                     </Button>
                   )}
                   <Button
-                    disabled={!profile || loading}
-                    onClick={() => prepare(selected)}
+                    disabled={busy || loading || selected.is_demo}
+                    onClick={() => void prepare(selected)}
                   >
                     <FileText size={15} />
-                    Prepare local draft
+                    Prepare application
                   </Button>
                   <p>
-                    Uses existing CV facts. No automatic tailoring, server write
-                    or submission. Duplicate drafts are blocked.
+                    Uses your verified master CV and saves a pending application
+                    to your local account. Review comes before manual sending.
                   </p>
                 </div>
               </>

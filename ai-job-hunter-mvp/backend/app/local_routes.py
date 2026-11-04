@@ -11,7 +11,7 @@ from .auth import signed_in
 from .db import get_session
 from .core import PROFILE
 from .models import (User, CandidateProfile, CVVersion, ApplicationDraft, DocumentVersion,
-                     Approval, AuditEvent, Job, now)
+                     Approval, AuditEvent, Job, SubmissionAttempt, RecruiterResponse, AgentTask, now)
 
 router = APIRouter(tags=['Local records'])
 
@@ -68,12 +68,38 @@ def current_document(db, app):
 
 def serialize(db, row):
     doc = current_document(db, row)
+    cv=db.get(CVVersion,doc.cv_version_id)
+    source_cv=cv.facts.get('source_cv') if isinstance(cv.facts.get('source_cv'),str) else cv.text
+    if cv.facts.get('master_cv_id'):
+        master=db.scalar(select(CVVersion).where(CVVersion.id==cv.facts['master_cv_id'],CVVersion.user_id==row.user_id))
+        if master: source_cv=master.text
     approved = db.scalar(select(Approval).where(Approval.application_id == row.id, Approval.user_id == row.user_id,
                          Approval.document_id == doc.id, Approval.decision == 'approved')) if row.status == 'approved' else None
+    sent=db.scalar(select(SubmissionAttempt).where(SubmissionAttempt.application_id==row.id,
+        SubmissionAttempt.user_id==row.user_id,SubmissionAttempt.result.in_(['sent','confirmed_by_user'])).order_by(SubmissionAttempt.created_at.desc()))
+    confirmation=None
+    if sent:
+        try: confirmation=json.loads(sent.confirmation or '{}')
+        except ValueError: pass
+    external=db.scalar(select(RecruiterResponse).where(RecruiterResponse.application_id==row.id,
+        RecruiterResponse.user_id==row.user_id,RecruiterResponse.kind=='external_submitted').order_by(RecruiterResponse.received_at.desc()))
+    if not confirmation and external:
+        confirmation={'provider':'user_reported','accepted_at':external.received_at,'meaning':'External submission reported by the user for this exact document version; not independently verified.'}
+    replies=select(RecruiterResponse).where(RecruiterResponse.application_id==row.id,RecruiterResponse.user_id==row.user_id)
+    significant=['interview','rejected','offer','withdrawn','mail_interview','mail_rejected','mail_offer','mail_withdrawn']
+    latest=db.scalar(replies.where(RecruiterResponse.kind.in_(significant)).order_by(RecruiterResponse.received_at.desc()))
+    if not latest: latest=db.scalar(replies.order_by(RecruiterResponse.received_at.desc()))
+    latest_kind=('submitted' if latest.kind=='external_submitted' else latest.kind.removeprefix('mail_')) if latest else None
+    task=db.scalar(select(AgentTask).where(AgentTask.application_id==row.id,AgentTask.document_id==doc.id,AgentTask.user_id==row.user_id))
     return {'id':row.id, 'job_external_id':row.job_external_id, 'job_url':row.job_url,
             'job':row.job_snapshot, **doc.payload, 'status':row.status, 'revision':row.revision,
             'document_id':doc.id, 'document_hash':doc.digest, 'created_at':row.created_at,
-            'approved_at':approved.created_at if approved else None, 'submitted_at':None, 'confirmation':None}
+            'approved_at':approved.created_at if approved else None,
+            'submitted_at':confirmation.get('accepted_at') if confirmation else None,
+            'confirmation':confirmation,'latest_outcome':latest_kind,
+            'outcome_provenance':'gmail_detected' if latest and latest.kind.startswith('mail_') else 'user_reported' if latest else None,
+            'cv_hash':cv.digest,'cv_verified':cv.verified,'source_cv':source_cv,
+            'submission_task':{key:getattr(task,key) for key in ['id','application_id','document_id','document_hash','status','automatic','error','created_at','updated_at']} if task else None}
 
 
 def new_cv(db, user_id, text, source_name='Pasted CV', facts=None):
@@ -89,9 +115,10 @@ def new_cv(db, user_id, text, source_name='Pasted CV', facts=None):
     return row
 
 
-def add_document(db, app, cv, cover_letter, answers):
+def add_document(db, app, cv, cover_letter, answers, delivery=None):
     payload = {'job':app.job_snapshot, 'cv_version':cv.id, 'cv':cv.text,
                'cover_letter':cover_letter, 'answers':answers, 'version':app.revision}
+    if delivery is not None: payload['delivery']=delivery
     row = DocumentVersion(application_id=app.id, user_id=app.user_id, cv_version_id=cv.id,
                           version=app.revision, payload=payload, digest=digest(payload))
     db.add(row)
@@ -99,6 +126,12 @@ def add_document(db, app, cv, cover_letter, answers):
     app.current_document_id = row.id
     app.updated_at = now()
     return row
+
+
+def ensure_not_sending(db,row):
+    if db.scalar(select(SubmissionAttempt.id).where(SubmissionAttempt.application_id==row.id,
+        SubmissionAttempt.user_id==row.user_id,SubmissionAttempt.result.in_(['sending','uncertain']))):
+        raise HTTPException(409,'A submission is in progress or its result is uncertain. Resolve it before changing this application.')
 
 
 class ExperienceInput(BaseModel):
@@ -126,6 +159,12 @@ class ProfileFacts(BaseModel):
     targets: TargetsInput = Field(default_factory=TargetsInput)
     unknowns: list[str] = Field(default_factory=list, max_length=50)
     source: str = Field(default='User-reviewed profile', max_length=255)
+    email: str = Field(default='',max_length=254)
+    phone: str = Field(default='',max_length=60)
+    professional_languages: list[str] = Field(default_factory=list,max_length=30)
+    work_authorization_countries: list[str] = Field(default_factory=list,max_length=50)
+    salary_expectations: str = Field(default='',max_length=500)
+    relocation_preferences: str = Field(default='',max_length=500)
 
 
 class ProfileInput(BaseModel):
@@ -297,6 +336,7 @@ class RevisionInput(DocumentsInput, DecisionInput): pass
 @router.put('/applications/{application_id}/documents')
 def revise(application_id: str, body: RevisionInput, user: User = Depends(signed_in), db: Session = Depends(get_session)):
     row = own_application(db, user, application_id)
+    ensure_not_sending(db,row)
     doc = check_snapshot(db, row, body)
     if row.status == 'submitted':
         raise HTTPException(409, 'Submitted applications cannot be edited.')
@@ -308,7 +348,7 @@ def revise(application_id: str, body: RevisionInput, user: User = Depends(signed
     if result.rowcount != 1:
         raise HTTPException(409, 'Another edit occurred. Reload the application.')
     db.refresh(row)
-    add_document(db, row, cv, body.cover_letter, body.answers)
+    add_document(db, row, cv, body.cover_letter, body.answers,doc.payload.get('delivery'))
     audit(db, user.id, 'application.revised_approval_invalidated', row.id, {'previous_document_id':doc.id,'version':row.revision})
     commit(db)
     return serialize(db, row)

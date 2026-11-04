@@ -299,7 +299,8 @@ export default function LocalAccountGate({
           </h1>
           <p className="muted">
             Each local account has its own profile, CVs and application history.
-            Your data stays on this computer.
+            Profiles and history are stored locally. External services are used
+            only through the connections you configure.
           </p>
           <div className="segmented">
             <button

@@ -11,9 +11,8 @@ export const metadata = {
 };
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      {/* Browser extensions such as Grammarly add body attributes before hydration.
-          Suppression is limited to this element; child mismatches remain visible. */}
+    // Browser extensions can add attributes to html and body before hydration.
+    <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
         <LocalAccountGate>{children}</LocalAccountGate>
       </body>

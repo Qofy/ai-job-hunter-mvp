@@ -1,3 +1,5 @@
+> Update: GermanTechJobs RSS is now also available through the Live feed selector. See [JOB_SOURCES.md](JOB_SOURCES.md) for provider-specific behavior and limits.
+
 # Real job discovery
 
 ## How to test
