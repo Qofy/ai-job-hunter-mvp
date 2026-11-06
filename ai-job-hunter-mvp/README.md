@@ -1,63 +1,34 @@
-# AI Job Hunter — Supervised MVP
+# JobPilot AI
 
-## JobPilot AI dashboard
+Local-first job discovery, CV and cover-letter tailoring, versioned approval, Gmail application delivery and reply tracking. Next.js 15 / React 19 / TypeScript / Tailwind frontend; FastAPI / SQLAlchemy / Alembic / SQLite backend. Normal pages use your account database and real public job feeds. Demo mode is disabled by default.
 
-The frontend now includes `/dashboard`, `/jobs`, `/approvals`, `/applications`, `/analytics`, `/profile` and `/settings`, with a dark-first responsive workspace and light mode. Real profile and discovery data use FastAPI. Application review is explicitly browser-local until authenticated version-bound backend review is available; no UI action submits applications.
+## Start on Windows
 
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the full repository audit, API mapping, changed files, completed features, missing backend capabilities, and Windows run/validation commands. Use `npm ci` in `frontend` to install the committed dependency lockfile.
+Install Python 3.11+ and Node.js 22.6+ first. From this directory:
 
-A runnable starter for Kofi's frontend/software engineering job search in Germany and the EU. **No application is submitted automatically.**
-
-## Included
-- Next.js dashboard with demo and live Greenhouse board search
-- FastAPI API with candidate profile, job normalization and heuristic matching
-- Supabase PostgreSQL schema with row-level security
-- Application preparation and approval API endpoints (require configured Supabase and valid user access token)
-- Unit tests and CV-derived profile (without Vue)
-
-## Quick start
-
-### Backend
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+```powershell
+.\Start-JobPilot.cmd
 ```
-Open http://localhost:8000/docs . Demo mode works without Supabase. Live Greenhouse mode requires internet access.
 
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
+Open http://127.0.0.1:3000. The launcher installs missing dependencies, builds the frontend, starts both services on loopback and checks their readiness. First launch needs internet access. Logs and data are in `%LOCALAPPDATA%\JobPilotAI`.
+
+```powershell
+.\Stop-JobPilot.cmd
 ```
-Open http://localhost:3000 . If the API is elsewhere, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local`.
 
-### Supabase (optional for demo, required for approval storage)
-1. Create a Supabase project.
-2. Run `supabase/schema.sql` in SQL Editor.
-3. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` **only in backend environment**. Never put the service role key in the frontend.
-4. Create a user in Supabase Auth and obtain an access token through an authenticated client. Send `Authorization: Bearer <token>` when using preparation/approval endpoints.
+Stop only closes processes owned by the launcher; data is retained. Existing separately started development servers are not stopped.
 
-## API
-- `GET /health`
-- `GET /profile`
-- `GET /jobs/demo` (fictional vacancies)
-- `GET /jobs/greenhouse/{board_slug}` (real vacancies from public Greenhouse job-board API)
-- `POST /applications/prepare` (requires verified Supabase JWT; stores pending approval)
-- `POST /applications/{id}/approve` (requires verified Supabase JWT; records approval, does not submit)
+## First use
 
-## Security and next milestones
-- This is a development MVP, not a production-ready application. Add authenticated frontend login, an approval UI, event audit writes, job persistence, pagination and rate limiting.
-- The approval endpoint **does not** submit applications; there is intentionally no submission executor. Build one only for permitted application workflows, and bind authorization to an immutable payload hash and explicit per-job approval.
-- The matching score is heuristic, not an ATS score or an interview probability. Work authorization, language and salary need human confirmation.
-- Greenhouse board IDs must be valid; API availability and platform terms can change. No LinkedIn automated access, CAPTCHA bypass, or bulk applications.
-- Never invent CV achievements. The supplied CV remains the factual source of truth.
+1. Create your own local account. Every account starts empty.
+2. In **My profile**, upload or paste your master CV, edit extracted facts, and explicitly verify it. Add languages, work authorization, salary and relocation preferences there. Unspecified facts stay unspecified.
+3. In **Settings**, save your search preferences and connect Gmail using a Google app password. Sending and reply tracking have separate permissions. No password belongs in chat or source code.
+4. Search **Job explorer**, or paste a job description in **CV studio**. Prepare, edit and download the exact CV and cover letter in PDF or DOCX.
+5. In **Approval center**, compare the original source and vacancy with the application documents. Set and confirm the employer's application email and eligibility, then approve the exact version and queue it.
+6. Use **Applications** and **Analytics** to follow actual records, SMTP acceptance, matched Gmail replies and separately labeled user-reported outcomes.
 
-## Run tests
-```bash
-cd backend
-python -m pytest -q
-```
+Review-first is the default. Optional automatic mode is restricted to confirmed employer email domains, verified source facts, eligible countries, fresh discovered vacancies and a weekly cap. Keep JobPilot running for scheduled discovery and inbox checks. AI-generated wording always requires review.
+
+**Supported automatic submission is email-based.** LinkedIn, Indeed, Glassdoor, XING and other website-only forms open as handoffs; JobPilot does not claim to submit those forms. SMTP acceptance means Gmail accepted the message, not that an employer received or read it. No ATS score guarantees an interview.
+
+Read [READY_TO_USE.md](READY_TO_USE.md) for exact setup, supported scope, privacy, troubleshooting, verification commands and changed files. [DOCUMENT_WORKFLOW.md](DOCUMENT_WORKFLOW.md) covers the document workflow. [PHASE_A.md](PHASE_A.md) and [IMPLEMENTATION.md](IMPLEMENTATION.md) are historical implementation milestones, not current feature limitations.

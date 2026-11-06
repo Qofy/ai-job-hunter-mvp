@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 import httpx
+from .job_filters import role_matches, DEFAULT_ROLES
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = json.loads((ROOT/'fixtures/profile.json').read_text(encoding='utf-8'))
@@ -23,13 +24,13 @@ def match_job(job: dict, profile: dict = PROFILE) -> dict:
     title = job['title'].lower()
     skills = profile['skills']
     hits = [s for s in skills if re.search(r'(?<!\w)'+re.escape(s.lower())+r'(?!\w)',text)]
-    title_terms = ['frontend','front-end','react','software engineer','junior developer','web developer','website developer']
-    role_fit = any(term in title for term in title_terms)
+    titles = profile.get('targets',{}).get('titles') or DEFAULT_ROLES
+    role_fit = any(role_matches(job,role) for role in titles)
     # Heuristic relevance only; not an ATS prediction or hiring probability.
     score = min(100, (40 if role_fit else 0) + min(40, len(hits)*8) + (10 if 'junior' in title else 0))
     blockers = []
-    if 'senior' in title or 'staff' in title or 'principal' in title: blockers.append('Seniority may exceed CV experience')
-    if 'vue' in text: blockers.append('Vue mentioned: review whether mandatory; never add Vue to CV')
+    if re.search(r'\b(senior|staff|principal|lead|head|director)\b',title): blockers.append('Review this role\'s seniority requirements against your CV')
+    if not skills: blockers.append('No profile skills saved yet; this relevance score uses the role title only')
     return {'score':score,'matched_skills':hits,'flags':blockers,'explanation':'Heuristic score from title and verified CV skill mentions; eligibility, language, and salary need manual review.'}
 
 async def greenhouse_jobs(board: str) -> list[dict]:

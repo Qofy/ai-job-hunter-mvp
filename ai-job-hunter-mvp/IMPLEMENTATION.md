@@ -1,5 +1,19 @@
 # JobPilot AI — repository audit and implementation
 
+Current architecture and instructions are documented in [PHASE_A.md](PHASE_A.md). The local SQLite migration supersedes the historical cloud/authentication notes below. The earlier hard-coded skill-exclusion policy has been removed and must not be reintroduced; source facts and skills are preserved.
+
+## CV Studio addition
+
+`/cv` adds an upload-and-review workspace, linked from the sidebar, My profile and job detail drawers. Backend modules `app/cv.py` and `app/cv_routes.py` provide ephemeral PDF/DOCX/UTF-8 text extraction and deterministic analysis/tailoring. Added dependencies are pypdf and defusedxml. The frontend uses typed contracts, a dedicated `components/cv-workspace.tsx`, editable source and tailored text, keyword gaps, section checks, explicit local saving, review-gated text export, and preparation for a selected job. Existing drafts cannot be overwritten or reapproved through this feature.
+
+The original extracted text is kept separately from edits. Uploads are streamed with a 5 MB cap; PDFs are limited to 10 pages, DOCX expansion/XML sizes are limited, entity expansion is rejected, and unreadable/scanned/encrypted files return actionable errors. No server upload storage or third-party model transfer occurs. The source profile remains unchanged. Saved CV text uses `localStorage['jobpilot.cv.workspace.v1']`; job handoff uses a one-time `sessionStorage['jobpilot.cv.target.v1']` entry. No persistence occurs until the user explicitly saves.
+
+Tailoring is labeled **rules-based**. It adds only a source-supported relevant-skills focus and retains the source body, employers, dates and education. All source skills are preserved; missing skills and unverified eligibility are not added. The user can edit and must review the exact output before export or preparing a draft. Any output edit clears the review checkbox. Application preparation still creates only a browser-local pending draft with exact-version approval required in Approval Center. Generative rewriting, source-layout-preserving PDF/DOCX export and OCR are not implemented.
+
+API additions: `POST /cv/extract?filename=...` with raw binary body; `POST /cv/analyze` and `/cv/tailor` with `{cv, job_description}`. The source CV is limited to 60,000 characters and the job description to 30,000. Tests now cover extraction, parser failures, PDF text/scan/page limits, hostile DOCX entities, streaming size limits, negative skill mentions, original CV facts, and source skill variants. Install updated requirements before restarting the backend.
+
+CV Studio validation: 24 backend tests and 5 frontend tests passed, plus typecheck, lint and production build. Browser verification covered a real file-picker upload with a labeled test CV, missing-skill analysis, source-preserving tailoring, review-gated export, invalidation after edits and the job-specific handoff from Job explorer. Production build validation used `JOBPILOT_DIST_DIR=.next-build` so it did not share the development server's output.
+
 ## Original repository
 
 The project is nested at `ai-job-hunter-mvp/` inside the workspace. The supplied `design/` folder sits beside it and contains four JPEG references: job explorer, document approval, dark Kanban, and dark analytics. Their information hierarchy informed the implementation; the new interface consistently uses the requested dark blue palette.
@@ -8,7 +22,7 @@ The project is nested at `ai-job-hunter-mvp/` inside the workspace. The supplied
 - `backend/app/main.py`: FastAPI, CORS restricted to `FRONTEND_ORIGIN` (default `http://localhost:3000`), verified Supabase JWT for application writes.
 - `backend/app/core.py`: CV-derived profile, fictional fixtures, Greenhouse API normalization, heuristic relevance scoring; no automated agent or submission executor.
 - `backend/app/db.py`: server-only Supabase service-role client. No credentials were copied to the frontend.
-- `fixtures/profile.json`: Kofi Safo Agyekum, Frontend Engineer, Uetersen; original skills, two employment entries, two projects, education, target roles and explicitly unknown eligibility/language/salary facts. Original PDF is referenced by filename but is not included. Vue is excluded.
+- `fixtures/profile.json`: Kofi Safo Agyekum, Frontend Engineer, Uetersen; original skills, two employment entries, two projects, education, target roles and explicitly unknown eligibility/language/salary facts. Original PDF is referenced by filename but is not included. Source skills are preserved without a global blacklist.
 - `fixtures/demo_jobs.json`: three explicitly fictional vacancies.
 - `supabase/schema.sql`: `candidate_profiles`, `jobs`, `job_matches`, `applications`, `approval_events`, `submission_attempts`; row-level security and owner policies. Applications are unique by user and external job ID. Existing approval events schema supports approved/rejected snapshots but the existing endpoint does not populate it.
 - `backend/tests/test_core.py`: three original tests for skill exclusion, demo scoring/labels and Greenhouse normalization.
@@ -45,7 +59,7 @@ Preparation payload: `job_id`, `job_url`, `cv_version`, `answers: Record<string,
 - `/approvals`: local review queue, job description, editable CV text, cover letter, screening answers, decision history, exact-version checkbox, snapshot fingerprint, safe local decisions and text download. Cover letter and answers start blank, with no invented achievements or eligibility answers.
 - `/applications`: local Kanban and table, version/status/history, duplicate prevention. No draggable status changes that could bypass approval. No fabricated confirmations.
 - `/analytics`: six weeks of actual browser-local live-source draft and approval counts; source breakdown. Responses/interviews unavailable, demo excluded.
-- `/profile`: original extracted CV facts, Vue-free skills, original experience/education/projects, unverified fields, local eligibility notes and export. It does not pretend the missing source PDF is bundled.
+- `/profile`: original extracted CV facts, source-preserved skills, original experience/education/projects, unverified fields, local eligibility notes and export. It does not pretend the missing source PDF is bundled.
 - `/settings`: locally persisted roles, all 27 EU country choices, arrangements, 10–15 target, connection health, clearly labeled agent-state preference, JSON backup.
 - Unknown routes return 404. Navigation is keyboard accessible; dialogs trap focus and close with Escape; skip link, labeled inputs, visible focus rings and reduced-motion handling are included.
 
@@ -107,7 +121,7 @@ cd ..\backend
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Frontend tests require Node 22.6+ with TypeScript stripping (verified on Node 24). They check immutable snapshot fingerprints, preserved CV facts with Vue exclusion, safe outbound URLs and Monday weekly boundaries. Original backend tests remain in place, with a fourth test covering UTF-8 CV dates.
+Frontend tests require Node 22.6+ with TypeScript stripping (verified on Node 24). They check immutable snapshot fingerprints, preserved CV facts without silently removing skills, safe outbound URLs and Monday weekly boundaries. Original backend tests remain in place, with a fourth test covering UTF-8 CV dates.
 
 Final verification: `npm run lint`, `npm run typecheck`, `npm test` (4 passed), `npm run build` (all seven routes generated), and backend pytest (4 passed). Browser checks covered API connectivity, explicit DEMO discovery, drawer, draft preparation, gated local approval, edit-triggered approval invalidation, demo exclusion from live KPIs, dark/light themes, 390px mobile layout and Escape-to-close navigation. A dashboard hydration issue found in the browser was fixed. Backend tests emit the existing pytest-asyncio configuration deprecation warning. Live external-board availability was not part of automated tests.
 
@@ -129,4 +143,3 @@ npm run dev -- --port 3001
 Preview: `http://localhost:3001/dashboard`. These preview processes were left running after verification. No existing service on ports 3000 or 8000 was stopped.
 
 For an isolated preview process, `JOBPILOT_DIST_DIR=.next-preview` selects a separate Next.js build directory. This prevents a second development server from sharing the normal build output.
-

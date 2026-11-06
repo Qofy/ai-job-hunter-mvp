@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   LayoutDashboard,
@@ -37,7 +37,26 @@ import {
   Globe2,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { api, type Job, type Profile } from "../lib/api";
+import CVWorkspace from "./cv-workspace";
+import SourceDirectory from "./source-directory";
+import AutomationSettings from "./automation-settings";
+import SavedApplications from "./saved-applications";
+import {
+  ProductionDashboard,
+  ProductionAnalytics,
+  ProductionApplications,
+} from "./production-workspace";
+import ProductionSettings from "./production-settings";
+import CandidateEditor from "./candidate-editor";
+import { useStorageKey } from "./local-account";
+import {
+  api,
+  liveSources,
+  type LiveSource,
+  type Job,
+  type Profile,
+  type LiveJobSearch,
+} from "../lib/api";
 import {
   countries,
   defaults,
@@ -51,6 +70,9 @@ import {
   type Preferences,
 } from "../lib/workspace";
 
+const legacyWorkspace = process.env.NEXT_PUBLIC_LEGACY_WORKSPACE === "true";
+const allowDemo = process.env.NEXT_PUBLIC_ENABLE_DEMO === "true";
+
 const navigation = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
   { id: "jobs", label: "Job explorer", icon: Search },
@@ -58,9 +80,14 @@ const navigation = [
   { id: "applications", label: "Applications", icon: BriefcaseBusiness },
   { id: "analytics", label: "Analytics", icon: ChartNoAxesCombined },
   { id: "profile", label: "My profile", icon: UserRound },
+  { id: "cv", label: "CV studio", icon: FileText },
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 const headings: Record<string, [string, string]> = {
+  cv: [
+    "Your experience. The right emphasis.",
+    "Upload, analyze and tailor your CV around a specific opportunity.",
+  ],
   dashboard: [
     "Your next chapter starts here.",
     "A little focus. The right opportunities. A career move that fits.",
@@ -180,7 +207,25 @@ function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
       )}
       <div className="job-card-footer">
         <span>
-          {job.is_demo ? "DEMO" : "Greenhouse"}{" "}
+          {job.is_demo ? (
+            "DEMO"
+          ) : (
+            <a
+              href={
+                job.source_home ||
+                (job.source === "arbeitnow"
+                  ? "https://www.arbeitnow.com"
+                  : "https://www.greenhouse.com")
+              }
+              target="_blank"
+              rel="noreferrer"
+            >
+              {job.source_label ||
+                liveSources[job.source as LiveSource] ||
+                "Greenhouse"}
+            </a>
+          )}{" "}
+          {job.data_provider && <span> · via {job.data_provider}</span>}
           <span className="muted">· Heuristic relevance</span>
         </span>
         <button className="text-button accent" onClick={() => onOpen(job)}>
@@ -192,6 +237,21 @@ function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
 }
 
 export default function Workspace({ section }: { section: string }) {
+  const storageKey = useStorageKey();
+  const initialLiveSearch = useRef(false);
+  const [roleQuery, setRoleQuery] = useState(defaults.roles.join(", "));
+  const [discovering, setDiscovering] = useState(false);
+  const [liveSource, setLiveSource] = useState<LiveSource>("arbeitnow");
+  const [jobDataConnected, setJobDataConnected] = useState(false);
+  useEffect(() => {
+    void api
+      .jobDataConnection()
+      .then((value) => setJobDataConnected(value.configured))
+      .catch(() => setJobDataConnected(false));
+  }, [section]);
+  const [sourceInfo, setSourceInfo] = useState<LiveJobSearch["source"] | null>(
+    null,
+  );
   const [profile, setProfile] = useState<Profile | null>(null),
     [jobs, setJobs] = useState<Job[]>([]),
     [drafts, setDrafts] = useState<Draft[]>([]),
@@ -235,20 +295,29 @@ export default function Workspace({ section }: { section: string }) {
   }
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("jobpilot.workspace.v1");
+      const saved = localStorage.getItem(storageKey("workspace.v1"));
       if (saved) {
         const value = JSON.parse(saved);
         if (Array.isArray(value.drafts)) setDrafts(value.drafts);
-        if (value.prefs) setPrefs({ ...defaults, ...value.prefs });
+        if (value.prefs) {
+          setPrefs({ ...defaults, ...value.prefs });
+          if (Array.isArray(value.prefs.roles))
+            setRoleQuery(value.prefs.roles.join(", "));
+        }
       }
-      const cached = sessionStorage.getItem("jobpilot.discovery.v1");
+      const cached = sessionStorage.getItem(storageKey("discovery.v1"));
       if (cached) {
         const v = JSON.parse(cached);
-        setJobs(v.jobs || []);
-        setMode(v.mode === "demo" ? "demo" : "live");
+        // Fictional jobs are only loaded by the explicit DEMO control.
+        if (v.mode !== "demo") {
+          setJobs((v.jobs || []).filter((job: Job) => !job.is_demo));
+          setSourceInfo(v.source || null);
+          if (v.feed && v.feed in liveSources) setLiveSource(v.feed);
+        }
+        setMode("live");
         setBoard(v.board || "");
       }
-      const t = localStorage.getItem("jobpilot.theme") || "dark";
+      const t = localStorage.getItem(storageKey("theme")) || "dark";
       setTheme(t);
       document.documentElement.dataset.theme = t;
     } catch {
@@ -256,14 +325,47 @@ export default function Workspace({ section }: { section: string }) {
         "Saved workspace could not be restored. New changes remain available in this session.",
       );
     }
-    setReady(true);
+    void api
+      .candidate()
+      .then((data) => {
+        const saved = data.preferences;
+        setPrefs((previous) => ({
+          ...previous,
+          roles: saved.roles || previous.roles,
+          countries: saved.countries || previous.countries,
+          arrangements: saved.arrangements || previous.arrangements,
+          target: saved.target || previous.target,
+        }));
+        if (saved.roles?.length) setRoleQuery(saved.roles.join(", "));
+      })
+      .catch(() => {})
+      .finally(() => setReady(true));
     void connect();
-  }, []);
+    if (section !== "jobs")
+      void api
+        .liveJobs()
+        .then((data) => {
+          if (data.source.status !== "not_searched") {
+            setJobs(data.jobs);
+            setMode("live");
+            setSourceInfo(data.source);
+          }
+        })
+        .catch(() => {});
+  }, [storageKey, section]);
+  useEffect(() => {
+    if (ready && section === "jobs" && !initialLiveSearch.current) {
+      initialLiveSearch.current = true;
+      void findRealJobs();
+    }
+    // Initial search runs once after account preferences have hydrated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, section]);
   useEffect(() => {
     if (ready)
       try {
         localStorage.setItem(
-          "jobpilot.workspace.v1",
+          storageKey("workspace.v1"),
           JSON.stringify({ drafts, prefs }),
         );
       } catch {
@@ -271,7 +373,7 @@ export default function Workspace({ section }: { section: string }) {
           "Browser storage is unavailable. Changes will be lost when this page closes.",
         );
       }
-  }, [drafts, prefs, ready]);
+  }, [drafts, prefs, ready, storageKey]);
   useEffect(() => {
     setReviewed(false);
     setReviewError("");
@@ -283,6 +385,59 @@ export default function Workspace({ section }: { section: string }) {
     ).length;
   const current =
     drafts.find((d) => d.id === active) || pending[0] || drafts[0];
+  async function findRealJobs() {
+    const roles = roleQuery
+      .split(",")
+      .map((role) => role.trim())
+      .filter(Boolean);
+    if (!roles.length) {
+      setError("Enter at least one target role, separated by commas.");
+      return;
+    }
+    setDiscovering(true);
+    setError("");
+    setNotice("");
+    if (mode === "demo") {
+      setJobs([]);
+      setSourceInfo(null);
+    }
+    setMode("live");
+    try {
+      const data = await api.searchJobs({
+        source: liveSource,
+        roles,
+        countries: country ? [country] : prefs.countries,
+        arrangements: arrangement ? [arrangement] : prefs.arrangements,
+      });
+      setJobs(data.jobs);
+      setSourceInfo(data.source);
+      setSearch("");
+      try {
+        sessionStorage.setItem(
+          storageKey("discovery.v1"),
+          JSON.stringify({
+            jobs: data.jobs,
+            mode: "live",
+            board,
+            source: data.source,
+            feed: liveSource,
+          }),
+        );
+      } catch {}
+      setNotice(
+        `${data.jobs.length} real role matches from ${data.source.scanned} source vacancies checked. ${data.source.status === "stale" ? "Refresh failed; showing previously checked vacancies." : data.source.status === "cached" ? "Using the hourly source cache." : "Live feed checked successfully."}`,
+      );
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Live job search failed.";
+      setError(message);
+      setSourceInfo((previous) =>
+        previous ? { ...previous, status: "stale", error: message } : null,
+      );
+    } finally {
+      setDiscovering(false);
+    }
+  }
   async function discover(demo = false) {
     if (!demo && !/^[a-zA-Z0-9_-]{2,80}$/.test(board.trim())) {
       setError(
@@ -290,11 +445,12 @@ export default function Workspace({ section }: { section: string }) {
       );
       return;
     }
-    setLoading(true);
+    setDiscovering(true);
     setError("");
     setJobs([]);
+    setSourceInfo(null);
     try {
-      sessionStorage.removeItem("jobpilot.discovery.v1");
+      sessionStorage.removeItem(storageKey("discovery.v1"));
     } catch {}
     try {
       const data = demo ? await api.demo() : await api.jobs(board.trim());
@@ -302,7 +458,7 @@ export default function Workspace({ section }: { section: string }) {
       setMode(demo ? "demo" : "live");
       try {
         sessionStorage.setItem(
-          "jobpilot.discovery.v1",
+          storageKey("discovery.v1"),
           JSON.stringify({ jobs: data, mode: demo ? "demo" : "live", board }),
         );
       } catch {}
@@ -314,45 +470,30 @@ export default function Workspace({ section }: { section: string }) {
         e instanceof Error ? e.message : "Discovery failed. Please retry.",
       );
     } finally {
-      setLoading(false);
+      setDiscovering(false);
     }
   }
-  function prepare(job: Job) {
-    if (!profile) {
-      setNotice(
-        "Connect to the backend to load the verified candidate profile first.",
-      );
-      return;
-    }
-    const existing = drafts.find(
-      (d) => d.job.id === job.id || (!job.is_demo && d.job.url === job.url),
-    );
-    if (existing) {
-      setActive(existing.id);
-      setNotice(
-        "This role already has a local application. Open Approval center to review it.",
-      );
+  async function prepare(job: Job, tailoredCV?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await api.prepareDiscovered({
+        job_id: job.id,
+        job_url: job.url,
+        cv_text: tailoredCV || undefined,
+        facts_confirmed: !!tailoredCV,
+      });
       setSelected(null);
-      return;
+      setNotice(
+        "Application saved to your local account. Open Approval center to review the exact CV, cover letter and job. Nothing was submitted.",
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Could not prepare the application.",
+      );
+    } finally {
+      setBusy(false);
     }
-    const at = new Date().toISOString();
-    const draft: Draft = {
-      id: crypto.randomUUID(),
-      job,
-      cv: cvText(profile),
-      letter: "",
-      answers: "",
-      version: 1,
-      status: "pending_approval",
-      createdAt: at,
-      events: [{ at, label: "Local draft prepared from verified CV facts" }],
-    };
-    setDrafts((prev) => [draft, ...prev]);
-    setActive(draft.id);
-    setSelected(null);
-    setNotice(
-      `${job.is_demo ? "DEMO draft" : "Local draft"} prepared. Review documents in Approval center. No server application was created.`,
-    );
   }
   function edit(field: "cv" | "letter" | "answers", value: string) {
     if (!current) return;
@@ -374,13 +515,8 @@ export default function Workspace({ section }: { section: string }) {
   async function decide(status: DraftStatus) {
     if (!current || busy) return;
     setReviewError("");
-    if (
-      status === "approved" &&
-      (/\bvue(?:\.js)?\b/i.test(current.cv) || !current.cv.trim())
-    ) {
-      setReviewError(
-        "The CV must contain verified candidate facts and must exclude Vue.",
-      );
+    if (status === "approved" && !current.cv.trim()) {
+      setReviewError("The CV must contain reviewed candidate facts.");
       return;
     }
     setBusy(true);
@@ -428,6 +564,8 @@ export default function Workspace({ section }: { section: string }) {
           .toLowerCase()
           .includes(search.toLowerCase()) &&
         (!country ||
+          j.country === country ||
+          (!j.country && j.source_market === country) ||
           j.location.toLowerCase().includes(country.toLowerCase())) &&
         (!arrangement ||
           j.workplace_type.toLowerCase() === arrangement.toLowerCase()) &&
@@ -485,9 +623,9 @@ export default function Workspace({ section }: { section: string }) {
             <ShieldCheck size={15} />
           </div>
           <p>
-            Every application needs
+            Your documents. Your rules.
             <br />
-            your explicit approval.
+            You stay in control.
           </p>
           <Link href="/profile" className="user-block">
             <span className="avatar">
@@ -539,7 +677,7 @@ export default function Workspace({ section }: { section: string }) {
                 setTheme(t);
                 document.documentElement.dataset.theme = t;
                 try {
-                  localStorage.setItem("jobpilot.theme", t);
+                  localStorage.setItem(storageKey("theme"), t);
                 } catch {}
               }}
             >
@@ -584,7 +722,8 @@ export default function Workspace({ section }: { section: string }) {
               </div>
               {section === "dashboard" && (
                 <p className="greeting">
-                  Welcome back{profile ? `, ${profile.name.split(" ")[0]}` : ""}{" "}
+                  Welcome back
+                  {profile?.name ? `, ${profile.name.split(" ")[0]}` : ""}{" "}
                   <span className="wave">✦</span>
                 </p>
               )}
@@ -602,7 +741,7 @@ export default function Workspace({ section }: { section: string }) {
                 </Button>
               ) : (
                 <Badge tone="blue">
-                  <ShieldCheck size={13} /> Supervised mode
+                  <ShieldCheck size={13} /> Local workspace
                 </Badge>
               )}
             </div>
@@ -610,12 +749,15 @@ export default function Workspace({ section }: { section: string }) {
           {error && (
             <div className="alert" role="alert">
               <CircleAlert size={18} />
-              <span>
-                {error} Check that FastAPI is running and BACKEND_API_URL points
-                to it, then retry.
-              </span>
-              <Button variant="outline" onClick={() => void connect()}>
-                Retry connection
+              <span>{error}</span>
+              <Button
+                variant="outline"
+                disabled={discovering}
+                onClick={() =>
+                  section === "jobs" ? void findRealJobs() : void connect()
+                }
+              >
+                {section === "jobs" ? "Retry search" : "Retry connection"}
               </Button>
             </div>
           )}
@@ -634,11 +776,11 @@ export default function Workspace({ section }: { section: string }) {
           )}
           <div className="scope-bar">
             <span>
-              <span className="status-dot" /> Browser-local workspace
+              <span className="status-dot" /> Local-first workspace
             </span>
             <span>
-              Drafts & decisions stay on this device. Server applications are
-              not loaded.
+              Real job feeds | Versioned applications | Your local account
+              database.
             </span>
           </div>
           {loading && (
@@ -646,7 +788,27 @@ export default function Workspace({ section }: { section: string }) {
               <RefreshCw size={14} className="spin" /> Connecting to your data…
             </div>
           )}
-          {section === "dashboard" && (
+          {discovering && (
+            <div className="loading-line" role="status">
+              <RefreshCw size={14} className="spin" />
+              Searching job sources…
+            </div>
+          )}
+          {!legacyWorkspace && section === "dashboard" && (
+            <ProductionDashboard />
+          )}
+          {!legacyWorkspace && section === "approvals" && (
+            <ProductionApplications reviewOnly />
+          )}
+          {!legacyWorkspace && section === "applications" && (
+            <ProductionApplications />
+          )}
+          {!legacyWorkspace && section === "analytics" && (
+            <ProductionAnalytics />
+          )}
+          {!legacyWorkspace && section === "profile" && <CandidateEditor />}
+          {!legacyWorkspace && section === "settings" && <ProductionSettings />}
+          {legacyWorkspace && section === "dashboard" && (
             <>
               <div className="stats-grid">
                 {[
@@ -708,7 +870,7 @@ export default function Workspace({ section }: { section: string }) {
                         <div className="panel-note">
                           {mode === "demo"
                             ? "DEMO · Fictional roles, excluded from live metrics"
-                            : "Live Greenhouse roles · Sorted by heuristic relevance"}
+                            : "Real sourced vacancies · Sorted by heuristic relevance"}
                         </div>
                         {[...jobs]
                           .sort((a, b) => b.match.score - a.match.score)
@@ -719,12 +881,12 @@ export default function Workspace({ section }: { section: string }) {
                       </>
                     ) : (
                       <Empty title="Your next role is out there.">
-                        Connect a Greenhouse board to discover real
-                        opportunities matched against your verified skills.
+                        Search real public vacancies across companies and
+                        compare them with your profile skills.
                         <div className="empty-action">
                           <Button asChild variant="outline">
                             <Link href="/jobs">
-                              Find your first matches <ArrowRight size={15} />
+                              Find real jobs <ArrowRight size={15} />
                             </Link>
                           </Button>
                         </div>
@@ -856,43 +1018,165 @@ export default function Workspace({ section }: { section: string }) {
           )}
           {section === "jobs" && (
             <>
+              <SourceDirectory
+                role={roleQuery.split(",")[0].trim()}
+                country={country || prefs.countries[0] || "Germany"}
+              />
               <div className="discovery-bar">
                 <div>
-                  <h2>Connect a job board</h2>
+                  <h2>Search real vacancies</h2>
                   <p>
-                    Use a public Greenhouse board slug to load current
-                    vacancies.
+                    Arbeitnow and GermanTechJobs connect directly. The added job
+                    boards use your TheirStack connection.
                   </p>
                 </div>
                 <form
-                  className="row wrap"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void discover();
+                  className="live-search-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void findRealJobs();
                   }}
                 >
-                  <label className="sr-only" htmlFor="board">
-                    Greenhouse board slug
+                  <label className="field-label" htmlFor="live-source">
+                    Live feed
+                    <select
+                      id="live-source"
+                      value={liveSource}
+                      disabled={discovering}
+                      onChange={(event) => {
+                        setLiveSource(event.target.value as LiveSource);
+                        setJobs([]);
+                        setSourceInfo(null);
+                        setError("");
+                        setNotice("");
+                      }}
+                    >
+                      {Object.entries(liveSources).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                  <input
-                    id="board"
-                    placeholder="Board slug, e.g. company name"
-                    value={board}
-                    onChange={(e) => setBoard(e.target.value)}
-                  />
-                  <Button disabled={loading || !board.trim()}>
-                    <Search size={15} />
-                    Search live board
-                  </Button>
+                  <label className="field-label" htmlFor="live-roles">
+                    Target roles (comma-separated)
+                    <input
+                      id="live-roles"
+                      value={roleQuery}
+                      maxLength={1000}
+                      onChange={(event) => setRoleQuery(event.target.value)}
+                      placeholder="Frontend Engineer, React Developer, Software Engineer"
+                    />
+                  </label>
                   <Button
-                    type="button"
-                    variant="outline"
-                    disabled={loading}
-                    onClick={() => void discover(true)}
+                    disabled={discovering || loading || !roleQuery.trim()}
                   >
-                    Load DEMO
+                    <Search size={16} />
+                    {discovering ? "Searching…" : "Find real jobs"}
                   </Button>
                 </form>
+                {!["arbeitnow", "germantechjobs"].includes(liveSource) && (
+                  <div className="notice" role="status">
+                    {jobDataConnected ? (
+                      "Connected through TheirStack. Each uncached search imports up to 25 recent vacancies and may use your provider credits. Coverage varies by board and country."
+                    ) : (
+                      <>
+                        Create a TheirStack account and connect its API key in{" "}
+                        <Link href="/settings#job-board-feeds">
+                          Settings → Job-board live feeds
+                        </Link>{" "}
+                        to import these vacancies.
+                      </>
+                    )}
+                  </div>
+                )}
+                <p className="live-search-note">
+                  Use the country and work-arrangement filters below, then
+                  search again. Unspecified arrangements are retained when
+                  searching all arrangements; locations and work eligibility
+                  still need review. The feed is cached for up to one hour.
+                </p>
+                {sourceInfo && (
+                  <div className="source-health">
+                    <div className="row wrap">
+                      <Badge
+                        tone={sourceInfo.status === "stale" ? "amber" : "green"}
+                      >
+                        {sourceInfo.status === "stale"
+                          ? "Cached · refresh failed"
+                          : sourceInfo.status === "cached"
+                            ? "Source cache"
+                            : "Live source checked"}
+                      </Badge>
+                      <span>
+                        {sourceInfo.scanned} vacancies checked ·{" "}
+                        {sourceInfo.pages} pages
+                        {sourceInfo.has_more ? " · bounded recent scan" : ""}
+                      </span>
+                      {sourceInfo.checked_at && (
+                        <time>
+                          Checked{" "}
+                          {new Date(sourceInfo.checked_at).toLocaleString()}
+                        </time>
+                      )}
+                    </div>
+                    {sourceInfo.error && (
+                      <p className="warning">{sourceInfo.error}</p>
+                    )}
+                    {sourceInfo.retry_at && (
+                      <p className="muted">
+                        Source retry available after{" "}
+                        {new Date(sourceInfo.retry_at).toLocaleString()}.
+                      </p>
+                    )}
+                    {sourceInfo.notes.map((note) => (
+                      <p className="muted" key={note}>
+                        {note}
+                      </p>
+                    ))}
+                    <p className="muted">{sourceInfo.coverage}</p>
+                  </div>
+                )}
+                <details className="advanced-discovery">
+                  <summary>
+                    Advanced: search a company�s Greenhouse board
+                  </summary>
+                  <form
+                    className="row wrap"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void discover();
+                    }}
+                  >
+                    <label className="sr-only" htmlFor="board">
+                      Greenhouse board slug
+                    </label>
+                    <input
+                      id="board"
+                      placeholder="Board slug, e.g. company name"
+                      value={board}
+                      onChange={(e) => setBoard(e.target.value)}
+                    />
+                    <Button disabled={loading || discovering || !board.trim()}>
+                      <Search size={15} />
+                      Search live board
+                    </Button>
+                    {allowDemo && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={loading || discovering}
+                        onClick={() => void discover(true)}
+                      >
+                        Load DEMO
+                      </Button>
+                    )}
+                  </form>
+                  <p className="live-search-note">
+                    Greenhouse searches a single public company board. Public
+                    feed searches above work across companies.
+                  </p>
+                </details>
               </div>
               <div className="explorer-layout">
                 <aside className="filter-panel">
@@ -918,7 +1202,7 @@ export default function Workspace({ section }: { section: string }) {
                       value={country}
                       onChange={(e) => setCountry(e.target.value)}
                     >
-                      <option value="">All locations</option>
+                      <option value="">All target countries</option>
                       {countries.map((c) => (
                         <option key={c}>{c}</option>
                       ))}
@@ -988,10 +1272,12 @@ export default function Workspace({ section }: { section: string }) {
                     <span className="muted">
                       {mode === "demo"
                         ? "Fictional data · isolated from live metrics"
-                        : "Greenhouse public boards"}
+                        : sourceInfo
+                          ? `${sourceInfo.name} · ${sourceInfo.status === "stale" ? "previously checked vacancies" : "real vacancies"}`
+                          : "Real job sources"}
                     </span>
                   </div>
-                  {loading ? (
+                  {loading || discovering ? (
                     <div className="skeleton-grid">
                       {[0, 1, 2, 3].map((i) => (
                         <div className="skeleton" key={i} />
@@ -1007,14 +1293,16 @@ export default function Workspace({ section }: { section: string }) {
                     <div className="panel">
                       <Empty
                         title={
-                          jobs.length
+                          jobs.length || sourceInfo
                             ? "No roles match these filters."
                             : "Good opportunities start with a search."
                         }
                       >
                         {jobs.length
                           ? "Try a broader keyword or reset your filters."
-                          : "Search a live Greenhouse board, or explicitly load the labeled DEMO to explore the workflow."}
+                          : sourceInfo
+                            ? "Try broader roles, countries, or all work arrangements. This recent feed has limited country coverage, and some workplaces are unspecified."
+                            : "Click Find real jobs to search public vacancies across companies."}
                       </Empty>
                     </div>
                   )}
@@ -1022,7 +1310,7 @@ export default function Workspace({ section }: { section: string }) {
               </div>
             </>
           )}
-          {section === "approvals" && (
+          {legacyWorkspace && section === "approvals" && (
             <>
               <div className="review-intro">
                 <ShieldCheck size={20} />
@@ -1317,8 +1605,9 @@ export default function Workspace({ section }: { section: string }) {
               )}
             </>
           )}
-          {section === "applications" && (
+          {legacyWorkspace && section === "applications" && (
             <>
+              <SavedApplications />
               <div className="section-toolbar">
                 <div>
                   <h2>
@@ -1419,7 +1708,7 @@ export default function Workspace({ section }: { section: string }) {
                             <small>{d.job.company}</small>
                           </td>
                           <td>
-                            {d.job.is_demo ? "DEMO" : "Local · Greenhouse"}
+                            {d.job.is_demo ? "DEMO" : `Local · ${d.job.source}`}
                           </td>
                           <td>
                             <Badge
@@ -1449,13 +1738,13 @@ export default function Workspace({ section }: { section: string }) {
               )}
               <div className="info-strip">
                 <CircleAlert size={17} />
-                Server application history and confirmation links require an
-                authenticated application-list API. Local approvals are not
-                submissions.
+                Saved records and reported progress appear above. Browser drafts
+                below are separate. Approval alone is not submission; recruiter
+                outcomes require evidence.
               </div>
             </>
           )}
-          {section === "analytics" && (
+          {legacyWorkspace && section === "analytics" && (
             <>
               <div className="stats-grid">
                 {[
@@ -1561,7 +1850,11 @@ export default function Workspace({ section }: { section: string }) {
                       <Globe2 size={18} />
                     </div>
                     <div>
-                      <strong>Greenhouse</strong>
+                      <strong>
+                        {Array.from(
+                          new Set(liveDrafts.map((d) => d.job.source)),
+                        ).join(", ") || "No source activity yet"}
+                      </strong>
                       <p>{liveDrafts.length} local drafts</p>
                     </div>
                     <Badge tone="blue">Live source</Badge>
@@ -1588,10 +1881,55 @@ export default function Workspace({ section }: { section: string }) {
               </div>
             </>
           )}
-          {section === "profile" && (
+          {legacyWorkspace && section === "profile" && (
             <>
+              <div className="cv-profile-cta">
+                <div>
+                  <FileText size={22} />
+                  <div>
+                    <h2>Give your next application the right focus.</h2>
+                    <p>
+                      Upload a CV, review its facts and tailor a separate draft
+                      to a job description.
+                    </p>
+                  </div>
+                </div>
+                <Button asChild>
+                  <Link href="/cv">
+                    Open CV studio <ArrowRight size={15} />
+                  </Link>
+                </Button>
+              </div>
               {profile ? (
                 <>
+                  {profile.source === "No CV verified yet" && (
+                    <div className="notice">
+                      <span>
+                        Upload your own CV in CV Studio. If you are the original
+                        candidate, you can explicitly import the supplied Kofi
+                        profile.
+                      </span>
+                      <Button
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            setProfile(await api.importExistingProfile());
+                            setNotice(
+                              "Supplied candidate facts imported into your local account.",
+                            );
+                          } catch (e) {
+                            setError(
+                              e instanceof Error
+                                ? e.message
+                                : "Profile import failed.",
+                            );
+                          }
+                        }}
+                      >
+                        Import supplied Kofi profile
+                      </Button>
+                    </div>
+                  )}
                   <div className="profile-banner">
                     <span className="avatar large">
                       {profile.name
@@ -1606,7 +1944,10 @@ export default function Workspace({ section }: { section: string }) {
                         {profile.headline} · {profile.location}
                       </p>
                       <Badge tone="green">
-                        <CircleCheck size={12} /> CV-derived facts
+                        <CircleCheck size={12} />{" "}
+                        {profile.source === "No CV verified yet"
+                          ? "Profile setup needed"
+                          : "CV-derived facts"}
                       </Badge>
                     </div>
                     <Button
@@ -1626,29 +1967,18 @@ export default function Workspace({ section }: { section: string }) {
                     <div>
                       <Panel
                         title="Verified skills"
-                        aside={
-                          <Badge>
-                            {
-                              profile.skills.filter(
-                                (s) => !s.toLowerCase().includes("vue"),
-                              ).length
-                            }{" "}
-                            skills
-                          </Badge>
-                        }
+                        aside={<Badge>{profile.skills.length} skills</Badge>}
                       >
                         <p className="muted">
                           Imported from the existing CV-derived candidate
                           profile.
                         </p>
                         <div className="tags skills">
-                          {profile.skills
-                            .filter((s) => !s.toLowerCase().includes("vue"))
-                            .map((s) => (
-                              <Badge tone="blue" key={s}>
-                                {s}
-                              </Badge>
-                            ))}
+                          {profile.skills.map((s) => (
+                            <Badge tone="blue" key={s}>
+                              {s}
+                            </Badge>
+                          ))}
                         </div>
                       </Panel>
                       <Panel title="Experience" className="mt">
@@ -1686,9 +2016,7 @@ export default function Workspace({ section }: { section: string }) {
                           original PDF. Preview and export reflect verified
                           extracted facts.
                         </p>
-                        <Badge tone="green">
-                          Vue excluded from candidate skills
-                        </Badge>
+                        <Badge tone="green">Source skills preserved</Badge>
                       </Panel>
                       <Panel
                         title="Details to confirm"
@@ -1740,7 +2068,7 @@ export default function Workspace({ section }: { section: string }) {
               )}
             </>
           )}
-          {section === "settings" && (
+          {legacyWorkspace && section === "settings" && (
             <div className="settings-grid">
               <div>
                 <Panel
@@ -1767,7 +2095,7 @@ export default function Workspace({ section }: { section: string }) {
                     </div>
                   </fieldset>
                   <fieldset>
-                    <legend>Target EU countries</legend>
+                    <legend>Target countries</legend>
                     <div className="country-grid">
                       {countries.map((c) => (
                         <label className="checkbox-label" key={c}>
@@ -1823,6 +2151,16 @@ export default function Workspace({ section }: { section: string }) {
                   <div className="integration">
                     <Globe2 size={21} />
                     <div>
+                      <strong>Arbeitnow public feed</strong>
+                      <small>
+                        Real vacancies · Germany-focused · hourly cache
+                      </small>
+                    </div>
+                    <Badge tone="green">Available</Badge>
+                  </div>
+                  <div className="integration">
+                    <Globe2 size={21} />
+                    <div>
                       <strong>Greenhouse boards</strong>
                       <small>Public, on-demand discovery</small>
                     </div>
@@ -1845,15 +2183,15 @@ export default function Workspace({ section }: { section: string }) {
                   <div className="integration">
                     <ShieldCheck size={21} />
                     <div>
-                      <strong>Supabase</strong>
+                      <strong>Local SQLite</strong>
                       <small>
                         {database
-                          ? "Server configured · login UI needed"
-                          : "Not configured on backend"}
+                          ? "Persistent data on this computer"
+                          : "Start backend to connect"}
                       </small>
                     </div>
-                    <Badge tone="amber">
-                      {database ? "Auth needed" : "Not connected"}
+                    <Badge tone={database ? "green" : "amber"}>
+                      {database ? "Ready" : "Offline"}
                     </Badge>
                   </div>
                   <Button
@@ -1866,7 +2204,8 @@ export default function Workspace({ section }: { section: string }) {
                     Check connection
                   </Button>
                 </Panel>
-                <Panel title="Agent controls" className="mt">
+                <AutomationSettings />
+                <Panel title="Browser planning controls" className="mt">
                   <p className="muted">
                     No scheduler or background agent exists yet. This is a local
                     planning preference.
@@ -1891,8 +2230,9 @@ export default function Workspace({ section }: { section: string }) {
                   </Button>
                   <div className="info-strip">
                     <ShieldCheck size={18} />
-                    Per-application approval is always required. Submission
-                    executor is not implemented.
+                    Choose your server-saved application mode above. These
+                    browser planning controls do not start a submission
+                    executor.
                   </div>
                 </Panel>
                 <Panel title="Workspace backup" className="mt">
@@ -1915,6 +2255,9 @@ export default function Workspace({ section }: { section: string }) {
                 </Panel>
               </div>
             </div>
+          )}
+          {section === "cv" && (
+            <CVWorkspace profile={profile} onPrepare={prepare} />
           )}
           <footer className="page-footer">
             <span>
@@ -1942,7 +2285,7 @@ export default function Workspace({ section }: { section: string }) {
                   <Badge tone={selected.is_demo ? "amber" : "blue"}>
                     {selected.is_demo
                       ? "DEMO · FICTIONAL ROLE"
-                      : "LIVE GREENHOUSE SOURCE"}
+                      : `LIVE ${selected.source.toUpperCase()} SOURCE`}
                   </Badge>
                   <Dialog.Close
                     className="icon-button"
@@ -1994,6 +2337,27 @@ export default function Workspace({ section }: { section: string }) {
                     "No description supplied by this source."}
                 </p>
                 <div className="drawer-actions">
+                  <Button asChild variant="outline">
+                    <Link
+                      href="/cv"
+                      onClick={(event) => {
+                        try {
+                          sessionStorage.setItem(
+                            storageKey("cv.target.v1"),
+                            JSON.stringify(selected),
+                          );
+                        } catch {
+                          event.preventDefault();
+                          setNotice(
+                            "Could not transfer this role. Paste its description in CV studio.",
+                          );
+                        }
+                      }}
+                    >
+                      <Sparkles size={15} />
+                      Tailor my CV
+                    </Link>
+                  </Button>
                   {!selected.is_demo && safeUrl(selected.url) && (
                     <Button asChild variant="outline">
                       <a
@@ -2006,16 +2370,31 @@ export default function Workspace({ section }: { section: string }) {
                       </a>
                     </Button>
                   )}
+                  {selected.source_url &&
+                    selected.source_url !== selected.url &&
+                    safeUrl(selected.source_url) && (
+                      <Button asChild variant="outline">
+                        <a
+                          href={safeUrl(selected.source_url)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View {selected.source_label || selected.source}{" "}
+                          listing
+                          <ArrowUpRight size={14} />
+                        </a>
+                      </Button>
+                    )}
                   <Button
-                    disabled={!profile || loading}
-                    onClick={() => prepare(selected)}
+                    disabled={busy || loading || selected.is_demo}
+                    onClick={() => void prepare(selected)}
                   >
                     <FileText size={15} />
-                    Prepare local draft
+                    Prepare application
                   </Button>
                   <p>
-                    Uses existing CV facts. No automatic tailoring, server write
-                    or submission. Duplicate drafts are blocked.
+                    Uses your verified master CV and saves a pending application
+                    to your local account. Review comes before manual sending.
                   </p>
                 </div>
               </>

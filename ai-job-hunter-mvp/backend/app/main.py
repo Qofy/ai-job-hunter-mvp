@@ -1,60 +1,117 @@
 import os
-from fastapi import FastAPI, HTTPException, Header
+import hashlib
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from .core import PROFILE, demo_jobs, greenhouse_jobs, match_job
-from .db import get_db
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from sqlalchemy import select, or_
+from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.orm import Session
+from .core import demo_jobs, greenhouse_jobs, match_job
+from .db import initialize, get_session, data_directory
+from .auth import router as auth_router, signed_in
+from .local_routes import router as local_router, canonical_url
+from .cv_routes import router as cv_router
+from .models import User, CandidateProfile, Job, now
+from .live_jobs import router as live_jobs_router
+from .document_studio import router as document_router
+from .workflow import router as workflow_router
+from .gmail import router as gmail_router
+from .agent import router as agent_router, worker
+from .production import router as production_router
+from .ai_connection import router as ai_connection_router
+from .ollama_connection import router as ollama_connection_router
+from .board_feeds import router as job_data_router
 
-app = FastAPI(title='AI Job Hunter MVP',version='0.1.0')
-app.add_middleware(CORSMiddleware,allow_origins=[os.getenv('FRONTEND_ORIGIN','http://localhost:3000')],allow_methods=['GET','POST'],allow_headers=['*'])
+@asynccontextmanager
+async def lifespan(app):
+    initialize()
+    task=asyncio.create_task(worker()) if os.getenv('JOBPILOT_AGENT_ENABLED','1')!='0' else None
+    yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError): await task
+
+
+app = FastAPI(title='JobPilot AI — Local', version='0.3.0',lifespan=lifespan)
+app.include_router(auth_router)
+app.include_router(local_router)
+app.include_router(cv_router)
+app.include_router(live_jobs_router)
+app.include_router(document_router)
+app.include_router(workflow_router)
+app.include_router(gmail_router)
+app.include_router(agent_router)
+app.include_router(production_router)
+app.include_router(ai_connection_router)
+app.include_router(ollama_connection_router)
+app.include_router(job_data_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request,exc):
+    return JSONResponse(status_code=422,content={'detail':[
+        {key:item[key] for key in ['loc','msg','type'] if key in item} for item in exc.errors()]})
+origins = {os.getenv('FRONTEND_ORIGIN','http://localhost:3000'), 'http://localhost:3000',
+           'http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001'}
+app.add_middleware(CORSMiddleware, allow_origins=sorted(origins), allow_credentials=True,
+                   allow_methods=['GET','POST','PUT'], allow_headers=['Content-Type','Authorization'])
+
+
+@app.middleware('http')
+async def local_request_policy(request: Request, call_next):
+    origin = request.headers.get('origin')
+    if request.method not in {'GET','HEAD','OPTIONS'} and origin and origin not in origins:
+        return JSONResponse({'detail':'Untrusted request origin.'}, status_code=403)
+    try:
+        response = await call_next(request)
+    except OperationalError:
+        return JSONResponse({'detail':'Local database is busy or unavailable. Retry the operation.'}, status_code=503)
+    except IntegrityError:
+        return JSONResponse({'detail':'A record conflict occurred. Refresh and retry.'}, status_code=409)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
 
 @app.get('/health')
-def health(): return {'ok':True,'database_configured':bool(get_db())}
+def health():
+    initialize()
+    return {'ok':True,'database_configured':True,'database':'sqlite','schema_version':'0003_queue_integrity',
+            'instance_id':hashlib.sha256(str(data_directory()).casefold().encode()).hexdigest()[:16]}
 
-@app.get('/profile')
-def profile(): return PROFILE
+
+def discovered(rows, user, db):
+    profile = db.get(CandidateProfile, user.id).profile
+    profile = {**profile, 'skills':profile.get('skills',[])}
+    for job in rows:
+        url = canonical_url(job['url']) if job.get('url') else None
+        conditions = [Job.external_id == job['id']]
+        if url:
+            conditions.append(Job.canonical_url == url)
+        stored = db.scalar(select(Job).where(or_(*conditions)))
+        if stored:
+            stored.payload, stored.last_seen_at = job, now()
+        else:
+            db.add(Job(source=job['source'], external_id=job['id'], canonical_url=url,
+                       payload=job, is_demo=job['is_demo']))
+    db.commit()
+    return [{**job,'match':match_job(job,profile)} for job in rows]
+
 
 @app.get('/jobs/demo')
-def demo(): return [{**j,'match':match_job(j)} for j in demo_jobs()]
+def demo(user: User = Depends(signed_in), db: Session = Depends(get_session)):
+    if os.getenv('JOBPILOT_ENABLE_DEMO','0')!='1':
+        raise HTTPException(403,'Demo fixtures are disabled in the real workspace.')
+    return discovered(demo_jobs(), user, db)
+
 
 @app.get('/jobs/greenhouse/{board}')
-async def discover(board: str):
-    try: jobs = await greenhouse_jobs(board)
-    except Exception as exc: raise HTTPException(502,detail=f'Job board unavailable: {type(exc).__name__}')
-    return [{**j,'match':match_job(j)} for j in jobs]
-
-class PreparedApplication(BaseModel):
-    job_id: str
-    job_url: str
-    cv_version: str
-    answers: dict[str,str] = {}
-    cover_letter: str = ''
-
-def verified_user(authorization: str | None):
-    db = get_db()
-    if not db: raise HTTPException(503,'Supabase not configured')
-    if not authorization or not authorization.startswith('Bearer '): raise HTTPException(401,'Supabase access token required')
+async def discover(board: str, user: User = Depends(signed_in), db: Session = Depends(get_session)):
+    db.commit()  # Do not hold a read transaction while waiting for an external board.
     try:
-        user = db.auth.get_user(authorization.removeprefix('Bearer ').strip()).user
-        if not user: raise ValueError('Missing user')
-        return db, str(user.id)
-    except Exception: raise HTTPException(401,'Invalid access token')
-
-@app.post('/applications/prepare')
-def prepare(body: PreparedApplication, authorization: str | None = Header(None)):
-    # Never submit. Verify the user through Supabase Auth.
-    db, x_user_id = verified_user(authorization)
-    row={'user_id':x_user_id,'job_external_id':body.job_id,'job_url':body.job_url,'cv_version':body.cv_version,'answers':body.answers,'cover_letter':body.cover_letter,'status':'pending_approval'}
-    try: return db.table('applications').insert(row).execute().data[0]
-    except Exception: raise HTTPException(500,'Unable to store application')
-
-@app.post('/applications/{application_id}/approve')
-def approve(application_id: str, authorization: str | None = Header(None)):
-    # Approval is recorded, but there is deliberately NO automatic submit endpoint in MVP.
-    db, x_user_id = verified_user(authorization)
-    rows=db.table('applications').select('*').eq('id',application_id).eq('user_id',x_user_id).execute().data
-    if not rows: raise HTTPException(404,'Application not found')
-    if rows[0]['status']!='pending_approval': raise HTTPException(409,'Application not pending approval')
-    from datetime import datetime, timezone
-    updated=db.table('applications').update({'status':'approved','approved_at':datetime.now(timezone.utc).isoformat()}).eq('id',application_id).eq('user_id',x_user_id).eq('status','pending_approval').execute().data
-    return {'approved':bool(updated),'submitted':False,'application':updated[0] if updated else None}
+        jobs = await greenhouse_jobs(board)
+    except Exception as exc:
+        raise HTTPException(502, f'Job board unavailable: {type(exc).__name__}') from exc
+    return discovered(jobs,user,db)
