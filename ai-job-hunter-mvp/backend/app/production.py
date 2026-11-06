@@ -143,7 +143,8 @@ def prepare_job(body:PrepareJob,user:User=Depends(signed_in),db:Session=Depends(
 def jobs(user:User=Depends(signed_in),db:Session=Depends(get_session)):
     from .live_jobs import saved
     found={};sources=[]
-    for kind in ['arbeitnow','germantechjobs']:
+    from .board_feeds import SOURCE_LABELS
+    for kind in SOURCE_LABELS:
         result=saved(kind,user,db)
         sources.append(result['source'])
         for job in result['jobs']:

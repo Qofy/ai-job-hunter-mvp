@@ -8,6 +8,14 @@
 
 DOCX and PDF exports use a selectable-text, single-column A4 template with standard section headings. They do not recreate the uploaded layout. Unsupported PDF glyphs produce a useful error; choose DOCX when needed. Structural and keyword warnings are guidance, not a guarantee of ATS acceptance or factual accuracy.
 
+## Ollama Cloud tailoring
+
+In CV Studio, choose **Generate tailored CV with Ollama** beside the source CV and job description. This action sends those inputs to Ollama Cloud and generates a complete job-specific CV and cover letter directly in the editable review area. Review the wording, corrections, missing-requirement warnings and source evidence before export. An unchanged source CV is rejected as an unsuccessful rewrite.
+
+The default model is `gemma4:31b`. A shared connection serves every local account and consumes the installation owner's Ollama allowance. Its key is encrypted in `ollama-cloud.enc` under the backend data directory. Private connections in Settings take precedence. Back up the encrypted configuration with `credential.key`. The browser receives connection metadata only.
+
+The connection check sends a short test prompt. Generation sends the source CV and selected job description after consent. Ollama Cloud responses are validated locally. Incomplete or invalid responses preserve the existing document drafts.
+
 ## Claude options
 
 Your existing Claude subscription works with **Download prompt for Claude**, **Open Claude** and pasting the result back into the editors. Downloading a prompt does not send the CV anywhere. Uploading/pasting it into Claude is your action.

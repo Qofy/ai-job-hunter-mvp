@@ -75,6 +75,9 @@ export default function CVWorkspace({
     [reviewed, setReviewed] = useState(false),
     [originalOpen, setOriginalOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const restoredKey = useRef<string | null>(null);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   useEffect(() => {
     void api
       .candidate()
@@ -88,6 +91,9 @@ export default function CVWorkspace({
       .catch(() => {});
   }, [storageKey]);
   useEffect(() => {
+    // Strict Mode replays effects after the one-time job handoff is consumed.
+    if (restoredKey.current === key) return;
+    restoredKey.current = key;
     try {
       const saved = localStorage.getItem(key);
       if (saved) {
@@ -95,16 +101,31 @@ export default function CVWorkspace({
         setSource(typeof data.source === "string" ? data.source : "");
         setOriginal(typeof data.original === "string" ? data.original : "");
         setFilename(data.filename || "");
-        setJd(typeof data.jd === "string" ? data.jd : "");
-        setTailored(typeof data.tailored === "string" ? data.tailored : "");
-        if (data.result) setResult(data.result);
-        if (data.analysis) setAnalysis(data.analysis);
-        if (data.target) setTarget(data.target);
+        if (
+          !data.target?.is_demo ||
+          process.env.NEXT_PUBLIC_ENABLE_DEMO === "true"
+        ) {
+          setJd(typeof data.jd === "string" ? data.jd : "");
+          setTailored(typeof data.tailored === "string" ? data.tailored : "");
+          if (data.result) setResult(data.result);
+          if (data.analysis) setAnalysis(data.analysis);
+          if (data.target) setTarget(data.target);
+        }
       }
+    } catch {
+      setNotice(
+        "Saved CV workspace could not be restored. You can start a new upload.",
+      );
+    }
+    try {
       const selected = sessionStorage.getItem(storageKey("cv.target.v1"));
       if (selected) {
         const job = JSON.parse(selected) as Job;
-        if (job.id && typeof job.description === "string") {
+        if (
+          job.id &&
+          typeof job.description === "string" &&
+          (!job.is_demo || process.env.NEXT_PUBLIC_ENABLE_DEMO === "true")
+        ) {
           setTarget(job);
           setJd(job.description);
           setResult(null);
@@ -115,9 +136,10 @@ export default function CVWorkspace({
       }
     } catch {
       setNotice(
-        "Saved CV workspace could not be restored. You can start a new upload.",
+        "The selected job could not be restored. Choose it again in Job explorer.",
       );
     }
+    setWorkspaceReady(true);
   }, [key, storageKey]);
   function invalidate() {
     setAnalysis(null);
@@ -420,20 +442,43 @@ export default function CVWorkspace({
               Analyze fit
             </Button>
             <Button
+              type="submit"
+              form="ollama-tailoring-form"
+              disabled={
+                !workspaceReady || !sourceValid || !jdValid || !!busy || aiBusy
+              }
+              onClick={() =>
+                document
+                  .getElementById("ai-tailoring")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              {aiBusy ? (
+                <RefreshCw size={15} className="spin" />
+              ) : (
+                <Sparkles size={15} />
+              )}
+              {aiBusy
+                ? "Writing your tailored CV…"
+                : "Generate tailored CV with Ollama"}
+            </Button>
+            <Button
               disabled={!sourceValid || !jdValid || !!busy}
               onClick={() => void run(true)}
+              variant="outline"
             >
               {busy === "tailor" ? (
                 <RefreshCw size={15} className="spin" />
               ) : (
                 <Sparkles size={15} />
               )}
-              Create tailored draft
+              Create skills-focus draft
             </Button>
           </div>
           <p className="cv-small muted">
-            A factual skills focus is added using only skills mentioned in both
-            documents. Job requirements never become candidate qualifications.
+            Generate a complete CV and cover letter using your extracted CV and
+            this job description. Clicking the Ollama button sends both to
+            Ollama Cloud. Review and correct the generated documents below.
           </p>
         </section>
       </div>
@@ -573,7 +618,15 @@ export default function CVWorkspace({
           </div>
         </section>
       )}
-      <DocumentStudio source={source} jd={jd} seed={tailored} target={target} />
+      {workspaceReady && (
+        <DocumentStudio
+          source={source}
+          jd={jd}
+          seed={tailored}
+          target={target}
+          onGenerationChange={setAiBusy}
+        />
+      )}
       <div className="cv-save-bar">
         <span>
           <Save size={16} />

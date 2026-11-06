@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  liveSources,
   type Application,
   type ApplicationListItem,
   type AgentTask,
@@ -29,8 +30,7 @@ import { safeUrl } from "../lib/workspace";
 import { Button } from "./ui/button";
 
 const sourceNames: Record<string, string> = {
-  arbeitnow: "Arbeitnow",
-  germantechjobs: "GermanTechJobs",
+  ...liveSources,
   greenhouse: "Greenhouse",
   user_provided: "Pasted vacancy",
 };

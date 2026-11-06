@@ -127,3 +127,73 @@ def test_provider_failures_do_not_expose_secrets_or_fabricate_drafts(client,monk
     assert result.status_code==502
     assert 'sensitive-provider-details' not in result.text and 'test-secret' not in result.text
     assert 'cv_draft' not in result.json()
+
+
+def test_ollama_shared_connection_is_encrypted_and_available_to_each_account(client):
+    from app.ollama_connection import OllamaConnection, save_shared_connection
+    from app.db import data_directory
+    key = 'fake-shared-ollama-key-for-tests'
+    save_shared_connection(OllamaConnection(api_key=key))
+    assert key.encode() not in (data_directory() / 'ollama-cloud.enc').read_bytes()
+    status = client.get('/connections/ollama').json()
+    assert status['configured'] and status['source'] == 'shared'
+    assert key not in json.dumps(status)
+    provider = client.get('/cv/documents/provider').json()
+    assert provider['provider'] == 'ollama'
+    client.post('/auth/register', json={'username':'second-cloud-user','password':'another-test-password-2026'})
+    assert client.get('/connections/ollama').json()['source'] == 'shared'
+
+
+def test_ollama_private_connection_overrides_shared_without_exposing_key(client, monkeypatch):
+    from app.ollama_connection import OllamaConnection, save_shared_connection
+    save_shared_connection(OllamaConnection(api_key='fake-shared-ollama-key'))
+    original = httpx.AsyncClient
+    def handler(request):
+        assert request.headers['authorization'] == 'Bearer fake-private-ollama-key'
+        assert SOURCE not in request.content.decode()
+        return httpx.Response(200, json={'done':True, 'message':{'content':'OK'}})
+    monkeypatch.setattr(studio.httpx,'AsyncClient',lambda **kwargs:original(**kwargs,transport=httpx.MockTransport(handler)))
+    result = client.post('/connections/ollama',json={'api_key':'fake-private-ollama-key','model':'gemma4:31b'})
+    assert result.status_code == 200 and result.json()['source'] == 'account'
+    assert 'fake-private-ollama-key' not in result.text
+    from app.db import get_engine
+    from app.models import Credential
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    with Session(get_engine()) as db:
+        assert 'fake-private-ollama-key' not in db.scalar(select(Credential).where(Credential.provider=='ollama')).encrypted_value
+    client.post('/auth/register',json={'username':'isolated-cloud-user','password':'another-test-password-2026'})
+    assert client.get('/connections/ollama').json()['source'] == 'shared'
+
+
+@pytest.mark.parametrize('mode',['valid','invalid','truncated','refused','unchanged'])
+def test_ollama_generation_validates_cloud_json_and_preserves_review(client,monkeypatch,mode):
+    from app.ollama_connection import OllamaConnection, save_shared_connection
+    save_shared_connection(OllamaConnection(api_key='fake-ollama-generation-key'))
+    original = httpx.AsyncClient
+    generated = {'cv_draft':SOURCE.replace('Built accessible','Developed accessible'), 'cover_letter':LETTER,
+                 'changes':['Reworded the supported accessibility experience.'], 'warnings':[],
+                 'evidence':[{'claim':'Accessible interfaces','source_quote':'Built accessible interfaces'}]}
+    def handler(request):
+        assert str(request.url) == 'https://ollama.com/api/chat'
+        sent = json.loads(request.content)
+        assert 'format' not in sent and sent['stream'] is False
+        assert json.loads(sent['messages'][1]['content'])['job_description'] == JD
+        if mode == 'unchanged':
+            generated['cv_draft'] = SOURCE
+        content = '```json\n'+json.dumps(generated)+'\n```' if mode in {'valid','unchanged'} else 'invalid data'
+        return httpx.Response(401 if mode=='refused' else 200,
+            json={'done':True,'done_reason':'length' if mode=='truncated' else 'stop','message':{'content':content}})
+    monkeypatch.setattr(studio.httpx,'AsyncClient',lambda **kwargs:original(**kwargs,transport=httpx.MockTransport(handler)))
+    payload = {'cv':SOURCE,'job_description':JD,'consent':True,'provider':'ollama'}
+    assert client.post('/cv/documents/generate',json={**payload,'consent':False}).status_code==422
+    result=client.post('/cv/documents/generate',json=payload)
+    assert 'fake-ollama-generation-key' not in result.text
+    if mode=='valid':
+        assert result.status_code==200, result.text
+        assert result.json()['provider']=='ollama'
+        assert result.json()['cv_draft'] != SOURCE
+        assert result.json()['evidence'] and result.json()['checks']['version_hash']
+        assert 'reviewed_hash' not in result.json()
+    else:
+        assert result.status_code==502 and 'cv_draft' not in result.json()

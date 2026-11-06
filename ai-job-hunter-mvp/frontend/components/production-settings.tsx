@@ -6,6 +6,8 @@ import { countries, defaults, download, type Draft } from "../lib/workspace";
 import { useStorageKey } from "./local-account";
 import { Button } from "./ui/button";
 import AutomationSettings from "./automation-settings";
+import OllamaSettings from "./ollama-settings";
+import JobDataSettings from "./job-data-settings";
 
 export function GmailConnection() {
   const [status, setStatus] = useState<GmailStatus | null>(null),
@@ -425,6 +427,8 @@ export default function ProductionSettings() {
       </div>
       <div>
         <GmailConnection />
+        <JobDataSettings />
+        <OllamaSettings />
         <ClaudeConnection />
         <AutomationSettings />
       </div>

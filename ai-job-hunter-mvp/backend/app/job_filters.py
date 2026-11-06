@@ -1,4 +1,4 @@
-"""Explainable local filtering; no CV or search criteria are sent to a feed."""
+"""Explainable local filtering shared by public and provider-based feeds."""
 import re
 
 DEFAULT_ROLES = ['Frontend Engineer', 'React Developer', 'Software Engineer', 'Junior Developer']
@@ -67,7 +67,8 @@ def job_matches(job, roles, countries, arrangements):
     country = job.get('country') or location_country(job.get('location',''))
     # An unknown country is never treated as verified eligibility. Only retain
     # ambiguous locations from a selected source market, with an explicit flag.
-    if countries and country not in countries and not (country is None and job.get('source_market') in countries):
+    explicit_countries = job.get('countries', [])
+    if countries and country not in countries and not any(value in countries for value in explicit_countries) and not (country is None and job.get('source_market') in countries):
         return False
     workplace = job.get('workplace_type','Unspecified')
     broad = {'Remote','Hybrid','On-site'}.issubset(set(arrangements))

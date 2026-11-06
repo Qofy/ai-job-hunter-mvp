@@ -20,6 +20,8 @@ export default function SourceDirectory({
     },
     { name: "Glassdoor", url: "https://www.glassdoor.com/Job/index.htm" },
     { name: "XING", url: "https://www.xing.com/jobs" },
+    { name: "HeyJobs", url: "https://www.heyjobs.co/de-de/jobs" },
+    { name: "eFinancialCareers", url: "https://www.efinancialcareers.com/" },
     { name: "EU Remote Jobs", url: "https://euremotejobs.com/" },
     { name: "JobLeads", url: "https://www.jobleads.com/" },
     { name: "GermanTechJobs", url: "https://germantechjobs.de/en" },
@@ -31,10 +33,10 @@ export default function SourceDirectory({
         <h2 id="additional-sources">Explore more job boards</h2>
       </div>
       <p className="muted">
-        GermanTechJobs and Arbeitnow have live feeds below. Other links open the
-        provider’s website; listings from those sites are not automatically
-        imported. Use CV Studio to tailor your CV to a job description you
-        provide.
+        Arbeitnow and GermanTechJobs connect directly. LinkedIn, Indeed,
+        Glassdoor, XING, HeyJobs and eFinancialCareers can be queried through
+        the TheirStack connection in the Live feed menu, subject to provider
+        coverage. These links open the original websites.
       </p>
       <div className="source-links">
         {boards.map((board) => (

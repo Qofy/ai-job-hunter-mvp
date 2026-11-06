@@ -17,14 +17,18 @@ export default function DocumentStudio({
   jd,
   seed,
   target,
+  onGenerationChange,
 }: {
   source: string;
   jd: string;
   seed: string;
   target: Job | null;
+  onGenerationChange?: (busy: boolean) => void;
 }) {
   const storageKey = useStorageKey();
   const key = storageKey("cv.documents.v1");
+  const restoredKey = useRef<string | null>(null);
+  const generating = useRef(false);
   const [cv, setCv] = useState(""),
     [letter, setLetter] = useState("");
   const [jobUrl, setJobUrl] = useState(""),
@@ -36,6 +40,7 @@ export default function DocumentStudio({
     setCompany(target?.company || "");
   }, [target]);
   const [provider, setProvider] = useState<{
+    provider: "claude" | "ollama";
     configured: boolean;
     model: string | null;
     message: string;
@@ -64,6 +69,7 @@ export default function DocumentStudio({
   const checked = check && snapshot === current;
   const reviewed = !!checked && accepted;
   async function loadProvider() {
+    setConsent(false);
     setProviderError("");
     try {
       setProvider(await api.documentProvider());
@@ -77,10 +83,14 @@ export default function DocumentStudio({
     void loadProvider();
   }, []);
   useEffect(() => {
+    if (restoredKey.current === key) return;
+    restoredKey.current = key;
     try {
       const stored = localStorage.getItem(key);
       if (stored) {
         const value = JSON.parse(stored);
+        // Restore only documents written for this source and job description.
+        if (value.source !== source || value.job_description !== jd) return;
         setCv(typeof value.cv === "string" ? value.cv.slice(0, 60000) : "");
         setLetter(
           typeof value.letter === "string" ? value.letter.slice(0, 15000) : "",
@@ -92,7 +102,7 @@ export default function DocumentStudio({
     } catch {
       setError("Saved document drafts could not be restored.");
     }
-  }, [key]);
+  }, [key, source, jd]);
   useEffect(() => {
     setAccepted(false);
     setConsent(false);
@@ -104,13 +114,20 @@ export default function DocumentStudio({
     setNotice("");
     setError("");
   }
-  async function generate() {
+  async function generate(selectedProvider?: "claude" | "ollama") {
+    if (generating.current || busy || !valid) return;
+    generating.current = true;
+    onGenerationChange?.(true);
     const context = contextRef.current;
     setBusy("generate");
     setError("");
     setNotice("");
     try {
-      const result = await api.generateDocuments(source, jd);
+      const result = await api.generateDocuments(
+        source,
+        jd,
+        selectedProvider || provider?.provider,
+      );
       if (context !== contextRef.current)
         throw new Error(
           "Source CV or job changed during generation. Existing drafts were kept; generate again for the current inputs.",
@@ -121,7 +138,7 @@ export default function DocumentStudio({
       setCheck(null);
       setAccepted(false);
       setNotice(
-        "Claude drafts are ready for editing. Compare every claim against your source before reviewing.",
+        "Your new job-specific CV and cover letter are ready below. Review the wording, correct any details, then check and export the exact documents.",
       );
     } catch (e) {
       setError(
@@ -130,6 +147,8 @@ export default function DocumentStudio({
           : "Generation failed. Existing drafts were kept.",
       );
     } finally {
+      generating.current = false;
+      onGenerationChange?.(false);
       setBusy("");
     }
   }
@@ -187,9 +206,23 @@ export default function DocumentStudio({
   }
   return (
     <section
+      id="ai-tailoring"
       className="panel mt document-studio"
       aria-labelledby="document-studio-title"
     >
+      <form
+        id="ollama-tailoring-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void generate("ollama");
+        }}
+      />
+      {busy === "generate" && (
+        <div className="notice" role="status" aria-live="polite">
+          Comparing your source CV with this job description and writing a
+          complete tailored CV and cover letter…
+        </div>
+      )}
       <div className="panel-heading">
         <h2 id="document-studio-title">
           <FileText size={18} /> CV & cover-letter documents
@@ -213,12 +246,18 @@ export default function DocumentStudio({
         </div>
       )}
       <div className="document-provider">
-        <strong>Claude writing assistant</strong>
+        <strong>AI CV & cover-letter tailoring</strong>
         <p className="cv-small muted">
           {provider?.message ||
             providerError ||
             "Checking backend configuration…"}
         </p>
+        <Button variant="outline" onClick={() => void loadProvider()}>
+          Refresh AI connection
+        </Button>
+        {!provider?.configured && (
+          <Link href="/settings">Connect Ollama Cloud in Settings</Link>
+        )}
         {providerError && (
           <Button variant="outline" onClick={() => void loadProvider()}>
             Retry provider check
@@ -253,8 +292,9 @@ export default function DocumentStudio({
                 disabled={!!busy}
                 onChange={(e) => setConsent(e.target.checked)}
               />
-              Send this source CV and job description to Anthropic for this
-              generation.
+              Send this source CV and job description to{" "}
+              {provider.provider === "ollama" ? "Ollama Cloud" : "Anthropic"}{" "}
+              for this generation.
             </label>
             <Button
               disabled={!valid || !consent || !!busy}
@@ -263,7 +303,9 @@ export default function DocumentStudio({
               <Sparkles size={15} />
               {busy === "generate"
                 ? "Generating drafts…"
-                : "Generate with Claude API"}
+                : provider.provider === "ollama"
+                  ? "Tailor with Ollama Cloud"
+                  : "Generate with Claude API"}
             </Button>
           </>
         )}
@@ -316,7 +358,7 @@ export default function DocumentStudio({
             maxLength={60000}
             disabled={!!busy}
             onChange={(e) => edit("cv", e.target.value)}
-            placeholder="Start from your source CV, or paste your Claude CV here…"
+            placeholder="Start from your source CV, generate an AI-tailored CV, or paste your edited CV here…"
           />
           <p className="cv-small muted">
             {cv.length.toLocaleString()} / 60,000 characters
@@ -333,7 +375,7 @@ export default function DocumentStudio({
             maxLength={15000}
             disabled={!!busy}
             onChange={(e) => edit("letter", e.target.value)}
-            placeholder="Write your letter, or paste Claude’s cover letter here…"
+            placeholder="Write your letter, generate an AI draft, or paste your cover letter here…"
           />
           <p className="cv-small muted">
             {letter.length.toLocaleString()} / 15,000 characters
@@ -342,7 +384,7 @@ export default function DocumentStudio({
       </div>
       {generated && (
         <details className="cv-original">
-          <summary>Claude changes and source evidence</summary>
+          <summary>AI changes and source evidence</summary>
           <ul>
             {generated.changes.map((item, i) => (
               <li key={i}>{item}</li>

@@ -46,4 +46,4 @@ def test_provider_choice_uses_separate_account_cache(monkeypatch):
         assert len(calls)==1
         assert client.get('/jobs/live?source=germantechjobs').json()['jobs']
         assert client.get('/jobs/live').json()['jobs']==[]
-        assert client.post('/jobs/search',json={'source':'linkedin'}).status_code==422
+        assert client.post('/jobs/search',json={'source':'unsupported-board'}).status_code==422

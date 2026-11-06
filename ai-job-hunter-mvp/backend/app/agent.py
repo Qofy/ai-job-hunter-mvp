@@ -354,7 +354,7 @@ async def discover_and_prepare(user_id,force=False):
                     from .document_studio import generate,Generation
                     try:
                         commit(db)
-                        generated=await generate(Generation(cv=master_text,job_description=job['description'],consent=True),user)
+                        generated=await generate(Generation(cv=master_text,job_description=job['description'],consent=True,provider='claude'),user)
                         tailored['text']=generated['cv_draft'];letter=generated['cover_letter'];ai_generated=True
                     except HTTPException as exc: warnings.append(str(exc.detail));stop_generation=True;break
                 db.refresh(candidate)

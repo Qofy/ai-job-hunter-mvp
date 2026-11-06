@@ -1,3 +1,16 @@
+export const liveSources = {
+  arbeitnow: "Arbeitnow",
+  germantechjobs: "GermanTechJobs",
+  theirstack: "All added boards · via TheirStack",
+  heyjobs: "HeyJobs",
+  efinancialcareers: "eFinancialCareers",
+  linkedin: "LinkedIn",
+  xing: "XING",
+  glassdoor: "Glassdoor",
+  indeed: "Indeed",
+} as const;
+export type LiveSource = keyof typeof liveSources;
+
 export type Profile = {
   email?: string;
   phone?: string;
@@ -35,6 +48,9 @@ export type Job = {
   country?: string | null;
   source_market?: string;
   source_home?: string;
+  source_label?: string;
+  source_url?: string;
+  data_provider?: string;
   match: {
     score: number;
     matched_skills: string[];
@@ -302,6 +318,60 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 export const api = {
+  jobDataConnection: () =>
+    request<{
+      configured: boolean;
+      provider: string;
+      tested_at: string | null;
+      results_per_search: number;
+      boards: string[];
+    }>("/connections/job-data"),
+  connectJobData: (api_key: string) =>
+    request<{
+      configured: boolean;
+      provider: string;
+      tested_at: string | null;
+      results_per_search: number;
+      boards: string[];
+    }>("/connections/job-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key }),
+    }),
+  disconnectJobData: () =>
+    request<{
+      configured: boolean;
+      provider: string;
+      tested_at: string | null;
+      results_per_search: number;
+      boards: string[];
+    }>("/connections/job-data/disconnect", { method: "POST" }),
+  ollamaConnection: () =>
+    request<{
+      configured: boolean;
+      model: string | null;
+      tested_at: string | null;
+      source: "account" | "shared" | null;
+    }>("/connections/ollama"),
+  connectOllama: (api_key: string, model: string) =>
+    request<{
+      configured: boolean;
+      model: string | null;
+      tested_at: string | null;
+      source: "account" | "shared" | null;
+    }>("/connections/ollama", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key, model }),
+      signal: AbortSignal.timeout(45000),
+    }),
+  disconnectOllama: () =>
+    request<{
+      configured: boolean;
+      model: string | null;
+      tested_at: string | null;
+      source: "account" | "shared" | null;
+    }>("/connections/ollama/disconnect", { method: "POST" }),
   exportApplication: async (
     row: Application,
     kind: "cv" | "cover-letter",
@@ -577,20 +647,27 @@ export const api = {
       body: JSON.stringify(body),
     }),
   documentProvider: () =>
-    request<{ configured: boolean; model: string | null; message: string }>(
-      "/cv/documents/provider",
-    ),
+    request<{
+      provider: "claude" | "ollama";
+      configured: boolean;
+      model: string | null;
+      message: string;
+    }>("/cv/documents/provider"),
   checkDocuments: (body: DocumentPayload) =>
     request<DocumentCheck>("/cv/documents/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  generateDocuments: (cv: string, job_description: string) =>
+  generateDocuments: (
+    cv: string,
+    job_description: string,
+    provider?: "claude" | "ollama",
+  ) =>
     request<DocumentGeneration>("/cv/documents/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cv, job_description, consent: true }),
+      body: JSON.stringify({ cv, job_description, consent: true, provider }),
       signal: AbortSignal.timeout(90000),
     }),
   exportDocument: async (
@@ -622,7 +699,7 @@ export const api = {
     roles: string[];
     countries: string[];
     arrangements: string[];
-    source?: "arbeitnow" | "germantechjobs";
+    source?: LiveSource;
   }) =>
     request<LiveJobSearch>("/jobs/search", {
       method: "POST",

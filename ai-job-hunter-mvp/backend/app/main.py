@@ -22,6 +22,8 @@ from .gmail import router as gmail_router
 from .agent import router as agent_router, worker
 from .production import router as production_router
 from .ai_connection import router as ai_connection_router
+from .ollama_connection import router as ollama_connection_router
+from .board_feeds import router as job_data_router
 
 @asynccontextmanager
 async def lifespan(app):
@@ -44,6 +46,8 @@ app.include_router(gmail_router)
 app.include_router(agent_router)
 app.include_router(production_router)
 app.include_router(ai_connection_router)
+app.include_router(ollama_connection_router)
+app.include_router(job_data_router)
 
 
 @app.exception_handler(RequestValidationError)

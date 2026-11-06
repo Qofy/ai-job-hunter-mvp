@@ -49,7 +49,14 @@ import {
 import ProductionSettings from "./production-settings";
 import CandidateEditor from "./candidate-editor";
 import { useStorageKey } from "./local-account";
-import { api, type Job, type Profile, type LiveJobSearch } from "../lib/api";
+import {
+  api,
+  liveSources,
+  type LiveSource,
+  type Job,
+  type Profile,
+  type LiveJobSearch,
+} from "../lib/api";
 import {
   countries,
   defaults,
@@ -213,13 +220,12 @@ function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
               target="_blank"
               rel="noreferrer"
             >
-              {job.source === "germantechjobs"
-                ? "GermanTechJobs"
-                : job.source === "arbeitnow"
-                  ? "Arbeitnow"
-                  : "Greenhouse"}
+              {job.source_label ||
+                liveSources[job.source as LiveSource] ||
+                "Greenhouse"}
             </a>
           )}{" "}
+          {job.data_provider && <span> · via {job.data_provider}</span>}
           <span className="muted">· Heuristic relevance</span>
         </span>
         <button className="text-button accent" onClick={() => onOpen(job)}>
@@ -235,9 +241,14 @@ export default function Workspace({ section }: { section: string }) {
   const initialLiveSearch = useRef(false);
   const [roleQuery, setRoleQuery] = useState(defaults.roles.join(", "));
   const [discovering, setDiscovering] = useState(false);
-  const [liveSource, setLiveSource] = useState<"arbeitnow" | "germantechjobs">(
-    "arbeitnow",
-  );
+  const [liveSource, setLiveSource] = useState<LiveSource>("arbeitnow");
+  const [jobDataConnected, setJobDataConnected] = useState(false);
+  useEffect(() => {
+    void api
+      .jobDataConnection()
+      .then((value) => setJobDataConnected(value.configured))
+      .catch(() => setJobDataConnected(false));
+  }, [section]);
   const [sourceInfo, setSourceInfo] = useState<LiveJobSearch["source"] | null>(
     null,
   );
@@ -301,6 +312,7 @@ export default function Workspace({ section }: { section: string }) {
         if (v.mode !== "demo") {
           setJobs((v.jobs || []).filter((job: Job) => !job.is_demo));
           setSourceInfo(v.source || null);
+          if (v.feed && v.feed in liveSources) setLiveSource(v.feed);
         }
         setMode("live");
         setBoard(v.board || "");
@@ -408,6 +420,7 @@ export default function Workspace({ section }: { section: string }) {
             mode: "live",
             board,
             source: data.source,
+            feed: liveSource,
           }),
         );
       } catch {}
@@ -1013,8 +1026,8 @@ export default function Workspace({ section }: { section: string }) {
                 <div>
                   <h2>Search real vacancies</h2>
                   <p>
-                    Choose a public feed below, or explore the additional job
-                    boards. Live feeds need no API key.
+                    Arbeitnow and GermanTechJobs connect directly. The added job
+                    boards use your TheirStack connection.
                   </p>
                 </div>
                 <form
@@ -1030,12 +1043,19 @@ export default function Workspace({ section }: { section: string }) {
                       id="live-source"
                       value={liveSource}
                       disabled={discovering}
-                      onChange={(event) =>
-                        setLiveSource(event.target.value as typeof liveSource)
-                      }
+                      onChange={(event) => {
+                        setLiveSource(event.target.value as LiveSource);
+                        setJobs([]);
+                        setSourceInfo(null);
+                        setError("");
+                        setNotice("");
+                      }}
                     >
-                      <option value="arbeitnow">Arbeitnow</option>
-                      <option value="germantechjobs">GermanTechJobs</option>
+                      {Object.entries(liveSources).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label className="field-label" htmlFor="live-roles">
@@ -1055,6 +1075,21 @@ export default function Workspace({ section }: { section: string }) {
                     {discovering ? "Searching…" : "Find real jobs"}
                   </Button>
                 </form>
+                {!["arbeitnow", "germantechjobs"].includes(liveSource) && (
+                  <div className="notice" role="status">
+                    {jobDataConnected ? (
+                      "Connected through TheirStack. Each uncached search imports up to 25 recent vacancies and may use your provider credits. Coverage varies by board and country."
+                    ) : (
+                      <>
+                        Create a TheirStack account and connect its API key in{" "}
+                        <Link href="/settings#job-board-feeds">
+                          Settings → Job-board live feeds
+                        </Link>{" "}
+                        to import these vacancies.
+                      </>
+                    )}
+                  </div>
+                )}
                 <p className="live-search-note">
                   Use the country and work-arrangement filters below, then
                   search again. Unspecified arrangements are retained when
@@ -1238,8 +1273,8 @@ export default function Workspace({ section }: { section: string }) {
                       {mode === "demo"
                         ? "Fictional data · isolated from live metrics"
                         : sourceInfo
-                          ? "Arbeitnow · real public vacancies"
-                          : "Real public job sources"}
+                          ? `${sourceInfo.name} · ${sourceInfo.status === "stale" ? "previously checked vacancies" : "real vacancies"}`
+                          : "Real job sources"}
                     </span>
                   </div>
                   {loading || discovering ? (
@@ -2305,13 +2340,14 @@ export default function Workspace({ section }: { section: string }) {
                   <Button asChild variant="outline">
                     <Link
                       href="/cv"
-                      onClick={() => {
+                      onClick={(event) => {
                         try {
                           sessionStorage.setItem(
                             storageKey("cv.target.v1"),
                             JSON.stringify(selected),
                           );
                         } catch {
+                          event.preventDefault();
                           setNotice(
                             "Could not transfer this role. Paste its description in CV studio.",
                           );
@@ -2334,6 +2370,21 @@ export default function Workspace({ section }: { section: string }) {
                       </a>
                     </Button>
                   )}
+                  {selected.source_url &&
+                    selected.source_url !== selected.url &&
+                    safeUrl(selected.source_url) && (
+                      <Button asChild variant="outline">
+                        <a
+                          href={safeUrl(selected.source_url)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View {selected.source_label || selected.source}{" "}
+                          listing
+                          <ArrowUpRight size={14} />
+                        </a>
+                      </Button>
+                    )}
                   <Button
                     disabled={busy || loading || selected.is_demo}
                     onClick={() => void prepare(selected)}
